@@ -242,3 +242,57 @@ fn texture_pool_is_bounded() {
     assert!(s.textures_created < 40, "pool keeps allocating: {}", s.textures_created);
     assert!(s.cached_frames <= g.frame_cache_size);
 }
+
+#[test]
+fn packed_export_planes_match_cpu() {
+    use kompo_core::media::MatrixCoefficients;
+    use kompo_gpu::pack::PackFormat;
+    let Some(ctx) = gpu() else { return };
+    let node = frame_node(rgba8(37, 21)); // odd sizes exercise chroma rounding
+    let mut g = GpuRenderer::new(ctx.clone());
+    let mut c = CpuRenderer::new();
+    let formats = [
+        (PackFormat::Planar { chroma_shift: (1, 1), bits: 8, alpha: false }, Some((MatrixCoefficients::Bt709, false, 8))),
+        (PackFormat::Planar { chroma_shift: (1, 0), bits: 10, alpha: false }, Some((MatrixCoefficients::Bt709, false, 10))),
+        (PackFormat::Planar { chroma_shift: (0, 0), bits: 12, alpha: true }, Some((MatrixCoefficients::Bt709, false, 12))),
+        (PackFormat::SemiPlanar { bits: 8 }, Some((MatrixCoefficients::Bt709, false, 8))),
+        (PackFormat::SemiPlanar { bits: 10 }, Some((MatrixCoefficients::Bt2020Ncl, false, 10))),
+        (PackFormat::Rgba { bits: 8 }, None),
+        (PackFormat::Rgba { bits: 16 }, None),
+    ];
+    for (fmt, ycc) in formats {
+        let spec = OutputSpec {
+            ycbcr: ycc,
+            dither: false,
+            background: if fmt.has_alpha() { None } else { Some([0.0, 0.0, 0.0, 1.0]) },
+            ..OutputSpec::display(WorkingSpace::LinearRec709)
+        };
+        let gp = g.render_packed(&node, &spec, fmt).unwrap();
+        let img = c.render_working(&node);
+        let cp = kompo_gpu::pack::pack_cpu(&c.encode(&img, &spec), img.width, img.height, fmt);
+        assert_eq!(gp.len(), cp.len());
+        for (a, b) in gp.iter().zip(&cp) {
+            assert_eq!((a.width, a.height, a.stride), (b.width, b.height, b.stride), "{fmt:?}");
+            let bps = if fmt.bits() > 8 { 2 } else { 1 };
+            let max_diff = a
+                .data
+                .chunks(bps)
+                .zip(b.data.chunks(bps))
+                .map(|(x, y)| {
+                    let v = |s: &[u8]| if bps == 1 { s[0] as i32 } else { u16::from_le_bytes([s[0], s[1]]) as i32 };
+                    (v(x) - v(y)).abs() >> fmt.msb_shift()
+                })
+                .max()
+                .unwrap();
+            // f16 intermediate precision on the GPU: at most a couple of codes at 10-12 bits
+            // 16-bit: the GPU working space is f16 (~11 significant bits), CPU is f32
+            let tol = match fmt.bits() {
+                8 => 1,
+                10 => 2,
+                12 => 8,
+                _ => 48,
+            };
+            assert!(max_diff <= tol, "{fmt:?}: max code difference {max_diff}");
+        }
+    }
+}

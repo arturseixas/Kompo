@@ -125,9 +125,15 @@ fn try_hw_device(codec: *const sys::AVCodec) -> Option<HwDevice> {
     None
 }
 
+/// swscale context owned by exactly one decoder (moving it between threads
+/// is safe; it is never shared).
+struct Scaler(ff::software::scaling::Context);
+// SAFETY: an SwsContext has no thread affinity; it is used by one thread at a time.
+unsafe impl Send for Scaler {}
+
 /// Converts a decoded software frame to our layout, possibly via swscale.
 struct Converter {
-    scaler: Option<(Pixel, u32, u32, ff::software::scaling::Context)>,
+    scaler: Option<(Pixel, u32, u32, Scaler)>,
 }
 
 impl Converter {
@@ -181,11 +187,11 @@ impl Converter {
         let need_new = !matches!(&self.scaler, Some((p, sw, sh, _)) if *p == src && *sw == w && *sh == h);
         if need_new {
             let ctx = ff::software::scaling::Context::get(src, w, h, Pixel::RGBA64LE, w, h, ff::software::scaling::Flags::BICUBIC)?;
-            self.scaler = Some((src, w, h, ctx));
+            self.scaler = Some((src, w, h, Scaler(ctx)));
         }
         let (_, _, _, sc) = self.scaler.as_mut().unwrap();
         let mut out = ff::frame::Video::empty();
-        sc.run(&f, &mut out)?;
+        sc.0.run(&f, &mut out)?;
         let mut color = color;
         color.matrix = kompo_core::media::MatrixCoefficients::Identity;
         color.full_range = true;

@@ -196,6 +196,7 @@ fn generate_to(path: &Path, spec: &TestClipSpec) -> Result<(), MediaError> {
         max_b_frames: None,
         color: ColorDescription::REC709,
         threads: 0,
+        codec_tag: None,
     };
     let audio = spec.audio.then(|| AudioEncoderConfig { encoder: "aac".into(), sample_rate: 48_000, channels: 2, bitrate: Some(128_000) });
     let mut writer = MediaWriter::create(path, None, Some(video), audio)?;

@@ -85,6 +85,8 @@ new_without_default = "allow"
 
 [profile.dev]
 opt-level = 1
+# keeps target/ small; full debug info: CARGO_PROFILE_DEV_DEBUG=full
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3

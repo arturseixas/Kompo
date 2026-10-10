@@ -11,11 +11,13 @@ pub mod encode;
 pub mod frame;
 pub mod image_io;
 pub mod probe;
+pub mod source;
 pub mod testmedia;
 pub mod video;
 
 pub use frame::{PixelLayout, SampleType, SharedFrame, VideoFrame};
 pub use probe::probe;
+pub use source::FrameSource;
 pub use video::{DecoderOptions, HwAccel, VideoDecoder};
 
 pub use ffmpeg_next;

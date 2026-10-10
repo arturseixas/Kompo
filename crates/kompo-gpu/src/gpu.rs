@@ -38,6 +38,21 @@ struct QuadParams {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PackParams {
+    src_size: [u32; 2],
+    plane_size: [u32; 2],
+    kind: u32,
+    bytes_per_sample: u32,
+    shift_x: u32,
+    shift_y: u32,
+    max_code: f32,
+    msb_shift: u32,
+    stride_words: u32,
+    offset_words: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct OutputParams {
     gamut: [[f32; 4]; 3],
     ycc: [[f32; 4]; 3],
@@ -164,6 +179,7 @@ pub struct GpuRenderer {
     uploads: u64,
     /// How many converted source frames to keep (scrubbing back and forth).
     pub frame_cache_size: usize,
+    pack: Option<wgpu::ComputePipeline>,
 }
 
 fn transfer_src(src: &str) -> String {
@@ -328,6 +344,7 @@ impl GpuRenderer {
             frame_index: 0,
             uploads: 0,
             frame_cache_size: 8,
+            pack: None,
             ctx,
         }
     }
@@ -722,6 +739,130 @@ impl GpuRenderer {
         let data = readback(&self.ctx, &target.texture, w, h, 8)?;
         self.pool.release(target);
         Ok(bytemuck::cast_slice(&data).to_vec())
+    }
+
+    /// Renders, applies the output transform and packs the result into the
+    /// planes of an encoder pixel format — all on the GPU (export path).
+    pub fn render_packed(
+        &mut self,
+        node: &NodeRef,
+        spec: &OutputSpec,
+        format: crate::pack::PackFormat,
+    ) -> Result<Vec<crate::pack::PackedPlane>, GpuError> {
+        let (w, h) = node.size();
+        let encoded = self.pool.acquire(&self.ctx.device, w, h, wgpu::TextureFormat::Rgba32Float);
+        let mut enc = self.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("kompo export") });
+        let mut memo = Memo::default();
+        let src = self.eval(&mut enc, node, &mut memo);
+        self.encode_output(&mut enc, &src, spec, &encoded.view, wgpu::TextureFormat::Rgba32Float);
+        let planes = format.planes(w, h);
+        let total_words: u64 = planes.iter().map(|p| p.stride_words() as u64 * p.height as u64).sum();
+        let size = total_words * 4;
+        let storage = self.ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("packed planes"),
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let pipeline = self.pack_pipeline();
+        let layout = pipeline.get_bind_group_layout(0);
+        let mut offset = 0u32;
+        let mut bind_groups = Vec::new();
+        for ps in &planes {
+            let params = PackParams {
+                src_size: [w, h],
+                plane_size: [ps.width, ps.height],
+                kind: ps.kind,
+                bytes_per_sample: ps.bytes_per_sample,
+                shift_x: ps.shift.0 as u32,
+                shift_y: ps.shift.1 as u32,
+                max_code: ((1u64 << format.bits()) - 1) as f32,
+                msb_shift: format.msb_shift(),
+                stride_words: ps.stride_words(),
+                offset_words: offset,
+            };
+            offset += ps.stride_words() * ps.height;
+            let ubuf = self.ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("pack params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bg = self.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("pack"),
+                layout: &layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&encoded.view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: storage.as_entire_binding() },
+                ],
+            });
+            bind_groups.push((bg, ps.stride_words().div_ceil(8), ps.height.div_ceil(8)));
+        }
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("pack"), timestamp_writes: None });
+            pass.set_pipeline(&pipeline);
+            for (bg, gx, gy) in &bind_groups {
+                pass.set_bind_group(0, bg, &[]);
+                pass.dispatch_workgroups(*gx, *gy, 1);
+            }
+        }
+        let readback = self.ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("packed readback"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_buffer_to_buffer(&storage, 0, &readback, 0, size);
+        self.ctx.queue.submit(Some(enc.finish()));
+        self.finish_frame(memo);
+        self.pool.release(encoded);
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.ctx
+            .device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+            .map_err(|e| GpuError::Readback(e.to_string()))?;
+        rx.recv().map_err(|e| GpuError::Readback(e.to_string()))?.map_err(|e| GpuError::Readback(e.to_string()))?;
+        let mapped = slice.get_mapped_range().map_err(|e| GpuError::Readback(format!("{e:?}")))?;
+        let mut out = Vec::with_capacity(planes.len());
+        let mut word = 0usize;
+        for ps in &planes {
+            let row = ps.row_bytes();
+            let stride_bytes = ps.stride_words() as usize * 4;
+            let mut data = Vec::with_capacity(row * ps.height as usize);
+            for y in 0..ps.height as usize {
+                let s = word * 4 + y * stride_bytes;
+                data.extend_from_slice(&mapped[s..s + row]);
+            }
+            word += ps.stride_words() as usize * ps.height as usize;
+            out.push(crate::pack::PackedPlane { data, stride: row, width: ps.width, height: ps.height });
+        }
+        drop(mapped);
+        readback.unmap();
+        Ok(out)
+    }
+
+    fn pack_pipeline(&mut self) -> wgpu::ComputePipeline {
+        if let Some(p) = &self.pack {
+            return p.clone();
+        }
+        let module = self.ctx.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("pack"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/pack.wgsl").into()),
+        });
+        let p = self.ctx.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("pack"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        self.pack = Some(p.clone());
+        p
     }
 
     /// Renders the working-space image (no output transform) for tests and analysis.

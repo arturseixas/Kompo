@@ -51,6 +51,18 @@ pub struct Frames<'a> {
     pub missing: u32,
 }
 
+impl<'a> Frames<'a> {
+    /// A provider over caller-owned decoder state (used by export).
+    pub fn new(
+        servers: &'a mut HashMap<ClipId, FrameServer>,
+        stills: &'a mut HashMap<MediaId, SharedFrame>,
+        opts: &'a DecoderOptions,
+        blocking: Option<Duration>,
+    ) -> Self {
+        Self { servers, stills, playing: true, opts, blocking, late: 0, missing: 0 }
+    }
+}
+
 impl FrameProvider for Frames<'_> {
     fn frame(&mut self, clip: &Clip, media: &MediaAsset, t: Time) -> Option<SharedFrame> {
         if media.info.kind == MediaKind::Image {
@@ -62,9 +74,12 @@ impl FrameProvider for Frames<'_> {
             return Some(f);
         }
         let path = media.proxy.as_ref().filter(|_| false).map(|p| p.path.clone()).unwrap_or_else(|| media.path.clone());
-        let server = self.servers.entry(clip.id).or_insert_with(|| FrameServer::spawn(&path, self.opts.clone(), DECODE_AHEAD));
+        let seq = media.sequence.clone();
+        let opts = self.opts.clone();
+        let server =
+            self.servers.entry(clip.id).or_insert_with(|| FrameServer::spawn_source(&path, seq.clone(), opts.clone(), DECODE_AHEAD));
         if server.path() != path {
-            *server = FrameServer::spawn(&path, self.opts.clone(), DECODE_AHEAD);
+            *server = FrameServer::spawn_source(&path, seq, opts, DECODE_AHEAD);
         }
         if let Some(timeout) = self.blocking {
             return server.wait(t, timeout);

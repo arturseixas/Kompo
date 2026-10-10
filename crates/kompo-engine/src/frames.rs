@@ -6,8 +6,9 @@
 //! straight to the most recent request, dropping stale ones. That is what
 //! keeps scrubbing responsive regardless of codec or GOP length.
 
+use kompo_core::media::ImageSequenceInfo;
 use kompo_core::time::Time;
-use kompo_media::{DecoderOptions, SharedFrame, VideoDecoder};
+use kompo_media::{DecoderOptions, SharedFrame};
 use parking_lot::{Condvar, Mutex};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -60,6 +61,11 @@ pub struct ServerStats {
 
 impl FrameServer {
     pub fn spawn(path: &Path, opts: DecoderOptions, ahead: usize) -> Self {
+        Self::spawn_source(path, None, opts, ahead)
+    }
+
+    /// Spawns a server for a video file or (with `sequence`) an image sequence.
+    pub fn spawn_source(path: &Path, sequence: Option<ImageSequenceInfo>, opts: DecoderOptions, ahead: usize) -> Self {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 req: Request { target: Time::ZERO, playing: false, generation: 0 },
@@ -77,7 +83,10 @@ impl FrameServer {
         let thread = {
             let shared = shared.clone();
             let path = path.to_path_buf();
-            std::thread::Builder::new().name("kompo-decode".into()).spawn(move || worker(shared, path, opts)).expect("spawn decoder")
+            std::thread::Builder::new()
+                .name("kompo-decode".into())
+                .spawn(move || worker(shared, path, sequence, opts))
+                .expect("spawn decoder")
         };
         Self { shared, thread: Some(thread), path: path.to_path_buf(), last_used: Instant::now() }
     }
@@ -160,8 +169,8 @@ impl Drop for FrameServer {
     }
 }
 
-fn worker(shared: Arc<Shared>, path: PathBuf, opts: DecoderOptions) {
-    let mut decoder = match VideoDecoder::open(&path, &opts) {
+fn worker(shared: Arc<Shared>, path: PathBuf, sequence: Option<ImageSequenceInfo>, opts: DecoderOptions) {
+    let mut decoder = match kompo_media::source::open(&path, sequence.as_ref(), &opts) {
         Ok(d) => d,
         Err(e) => {
             log::error!("cannot open {}: {e}", path.display());

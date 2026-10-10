@@ -9,6 +9,7 @@
 pub mod audio;
 pub mod bench;
 pub mod compose;
+pub mod export;
 pub mod frames;
 pub mod import;
 pub mod player;

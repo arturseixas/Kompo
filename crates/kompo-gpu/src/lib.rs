@@ -11,6 +11,7 @@ pub mod cpu;
 pub mod gpu;
 pub mod graph;
 pub mod image;
+pub mod pack;
 
 pub use context::{GpuContext, GpuError};
 pub use cpu::CpuRenderer;
@@ -66,6 +67,23 @@ impl Renderer {
             Renderer::Cpu(c) => {
                 let _ = c.render_rgba8(node, spec);
                 Ok(())
+            }
+        }
+    }
+
+    /// Renders and packs into encoder planes (export).
+    pub fn render_packed(
+        &mut self,
+        node: &NodeRef,
+        spec: &OutputSpec,
+        format: pack::PackFormat,
+    ) -> Result<Vec<pack::PackedPlane>, GpuError> {
+        match self {
+            Renderer::Gpu(g) => g.render_packed(node, spec, format),
+            Renderer::Cpu(c) => {
+                let img = c.render_working(node);
+                let enc = c.encode(&img, spec);
+                Ok(pack::pack_cpu(&enc, img.width, img.height, format))
             }
         }
     }

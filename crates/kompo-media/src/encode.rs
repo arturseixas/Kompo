@@ -27,6 +27,8 @@ pub struct VideoEncoderConfig {
     pub max_b_frames: Option<usize>,
     pub color: ColorDescription,
     pub threads: usize,
+    /// Container FourCC override (e.g. `hvc1` so Apple players accept HEVC in MP4).
+    pub codec_tag: Option<[u8; 4]>,
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +113,7 @@ pub struct MediaWriter {
     video: Option<VideoOut>,
     audio: Option<AudioOut>,
     header_written: bool,
+    mux_options: Vec<(String, String)>,
 }
 
 impl MediaWriter {
@@ -163,6 +166,10 @@ impl MediaWriter {
             let mut st = octx.add_stream(codec)?;
             st.set_parameters(&encoder);
             st.set_time_base(tb);
+            if let Some(tag) = cfg.codec_tag {
+                // SAFETY: codecpar is owned by the stream and valid while the context lives.
+                unsafe { (*st.parameters().as_mut_ptr()).codec_tag = u32::from_le_bytes(tag) };
+            }
             let stream = st.index();
             vout = Some(VideoOut { stream, encoder, time_base: tb, scaler: None, next_pts: 0, config: cfg });
         }
@@ -199,7 +206,17 @@ impl MediaWriter {
                 next_pts: 0,
             });
         }
-        Ok(Self { path: path.to_path_buf(), octx, video: vout, audio: aout, header_written: false })
+        Ok(Self { path: path.to_path_buf(), octx, video: vout, audio: aout, header_written: false, mux_options: Vec::new() })
+    }
+
+    /// Sets a muxer option (e.g. `movflags=+faststart`); must be called before the first write.
+    pub fn set_mux_option(&mut self, key: &str, value: &str) {
+        self.mux_options.push((key.to_string(), value.to_string()));
+    }
+
+    /// Encoder name of the video stream.
+    pub fn video_encoder(&self) -> Option<&str> {
+        self.video.as_ref().map(|v| v.config.encoder.as_str())
     }
 
     pub fn path(&self) -> &Path {
@@ -208,7 +225,15 @@ impl MediaWriter {
 
     fn ensure_header(&mut self) -> Result<(), MediaError> {
         if !self.header_written {
-            self.octx.write_header()?;
+            if self.mux_options.is_empty() {
+                self.octx.write_header()?;
+            } else {
+                let mut dict = ff::Dictionary::new();
+                for (k, v) in &self.mux_options {
+                    dict.set(k, v);
+                }
+                self.octx.write_header_with(dict)?;
+            }
             self.header_written = true;
         }
         Ok(())
@@ -232,6 +257,28 @@ impl MediaWriter {
         v.next_pts += 1;
         v.encoder.send_frame(frame)?;
         Self::drain_video(&mut self.octx, v)
+    }
+
+    /// Encodes a frame given as planes already in the encoder's pixel format
+    /// (e.g. packed by the GPU): `(bytes, stride)` per plane.
+    pub fn write_planes(&mut self, planes: &[(&[u8], usize)]) -> Result<(), MediaError> {
+        let (w, h, pix) = self.video_format().ok_or(MediaError::NoVideo)?;
+        let mut f = ff::frame::Video::new(pix, w, h);
+        let n = f.planes().min(planes.len());
+        for (i, (src, src_stride)) in planes.iter().enumerate().take(n) {
+            let dst_stride = f.stride(i);
+            let rows = f.plane_height(i) as usize;
+            let row_bytes = (*src_stride).min(dst_stride);
+            let dst = f.data_mut(i);
+            for y in 0..rows {
+                let s = y * src_stride;
+                if s + row_bytes > src.len() {
+                    break;
+                }
+                dst[y * dst_stride..y * dst_stride + row_bytes].copy_from_slice(&src[s..s + row_bytes]);
+            }
+        }
+        self.write_frame(&mut f)
     }
 
     /// Encodes packed RGBA (8 or 16 bit, given by `pix`) by converting with swscale.
@@ -424,4 +471,45 @@ fn set_sws_colorspace(sc: &mut ff::software::scaling::Context, color: ColorDescr
 pub fn encoder_available(name: &str) -> bool {
     ensure_init();
     ff::encoder::find_by_name(name).is_some()
+}
+
+/// `true` if the encoder can actually be opened with this pixel format on
+/// this machine (hardware encoders are listed even without the hardware).
+/// Results are cached per process.
+pub fn encoder_works(name: &str, pix: Pixel) -> bool {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<HashMap<(String, i32), bool>>> = Mutex::new(None);
+    let key = (name.to_string(), pix as i32);
+    if let Some(v) = CACHE.lock().unwrap().as_ref().and_then(|m| m.get(&key).copied()) {
+        return v;
+    }
+    let ok = probe_encoder(name, pix);
+    CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(key, ok);
+    ok
+}
+
+fn probe_encoder(name: &str, pix: Pixel) -> bool {
+    ensure_init();
+    let Some(codec) = ff::encoder::find_by_name(name) else { return false };
+    let Ok(mut ctx) = ff::codec::context::Context::new_with_codec(codec).encoder().video() else { return false };
+    ctx.set_width(256);
+    ctx.set_height(256);
+    ctx.set_format(pix);
+    ctx.set_time_base(ff::Rational::new(1, 25));
+    ctx.set_frame_rate(Some(ff::Rational::new(25, 1)));
+    // keep FFmpeg quiet while probing missing hardware
+    let level = unsafe { ffmpeg_sys_next::av_log_get_level() };
+    unsafe { ffmpeg_sys_next::av_log_set_level(ffmpeg_sys_next::AV_LOG_QUIET) };
+    let ok = ctx.open_as(codec).is_ok();
+    unsafe { ffmpeg_sys_next::av_log_set_level(level) };
+    ok
+}
+
+/// Pixel formats an encoder declares (`None` if it accepts anything or is missing).
+pub fn encoder_pixel_formats(name: &str) -> Option<Vec<Pixel>> {
+    ensure_init();
+    let codec = ff::encoder::find_by_name(name)?;
+    let video = codec.video().ok()?;
+    video.formats().map(|f| f.collect())
 }

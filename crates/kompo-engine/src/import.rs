@@ -10,6 +10,24 @@ use std::path::Path;
 /// Default length of a still image placed on the timeline.
 pub const STILL_CLIP_SECONDS: f64 = 5.0;
 
+/// Probes a file; a numbered still (`shot.0001.exr`) with siblings becomes an
+/// image sequence at `rate`.
+pub fn probe_with_sequences(path: &Path, rate: kompo_core::time::Rational) -> Result<MediaAsset, kompo_media::MediaError> {
+    let mut asset = probe_asset(path)?;
+    if let Some(seq) = kompo_media::source::detect_sequence(path, rate) {
+        let frames = seq.last - seq.first + 1;
+        asset.info.kind = MediaKind::ImageSequence;
+        asset.info.duration = Time::from_frames(frames, rate);
+        if let Some(v) = asset.info.video.as_mut() {
+            v.frame_rate = rate;
+            v.frame_count = Some(frames);
+        }
+        asset.name = seq.pattern.replace("{frame}", &format!("[{}-{}]", seq.first, seq.last));
+        asset.sequence = Some(seq);
+    }
+    Ok(asset)
+}
+
 /// Probes a file and returns a media pool asset.
 pub fn probe_asset(path: &Path) -> Result<MediaAsset, kompo_media::MediaError> {
     let info = kompo_media::probe(path)?;

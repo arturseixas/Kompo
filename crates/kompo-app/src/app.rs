@@ -242,7 +242,8 @@ impl KompoApp {
 
     /// Imports a media file and appends it to the active sequence.
     pub fn import(&mut self, path: &Path) {
-        match import::probe_asset(path) {
+        let rate = self.history.project().active().format.frame_rate;
+        match import::probe_with_sequences(path, rate) {
             Ok(asset) => {
                 let name = asset.name.clone();
                 let id = asset.id;
