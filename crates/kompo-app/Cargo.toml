@@ -27,6 +27,7 @@ egui.workspace = true
 egui-wgpu.workspace = true
 wgpu.workspace = true
 rfd.workspace = true
+dirs.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true

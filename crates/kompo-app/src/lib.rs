@@ -2,6 +2,7 @@
 //! headless by the UI benchmark and tests.
 
 pub mod app;
+pub mod export_ui;
 pub mod inspector;
 pub mod media_pool;
 pub mod theme;

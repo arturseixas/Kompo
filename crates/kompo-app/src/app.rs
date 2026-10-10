@@ -82,6 +82,7 @@ pub struct KompoApp {
     close_dialog: bool,
     allow_close: bool,
     last_autosave: Instant,
+    pub export: crate::export_ui::ExportUi,
 }
 
 impl KompoApp {
@@ -90,7 +91,12 @@ impl KompoApp {
         let ctx = cc.wgpu_render_state.as_ref().map(|rs| GpuContext::from_existing(&rs.adapter, rs.device.clone(), rs.queue.clone()));
         let renderer = Renderer::auto(ctx);
         log::info!("renderer: {}", renderer.name());
+        let gpu = match &renderer {
+            Renderer::Gpu(g) => Some(g.ctx.clone()),
+            _ => None,
+        };
         let mut app = Self::with_renderer(renderer, launch.clone());
+        app.export = crate::export_ui::ExportUi::new(gpu);
         app.render_state = cc.wgpu_render_state.clone();
         app
     }
@@ -114,6 +120,7 @@ impl KompoApp {
             close_dialog: false,
             allow_close: false,
             last_autosave: Instant::now(),
+            export: crate::export_ui::ExportUi::new(None),
             launch: launch.clone(),
         };
         if launch.multicam && launch.files.len() >= 2 {
@@ -787,6 +794,29 @@ impl KompoApp {
         if cmd(Key::I) {
             self.import_dialog();
         }
+        if cmd(Key::M) {
+            self.export.open_for(self.history.project());
+        }
+        if cmd_shift(Key::E) {
+            self.export_frame_dialog();
+        }
+    }
+
+    /// Saves the frame under the playhead as PNG, JPEG or EXR.
+    pub fn export_frame_dialog(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "exr"])
+            .set_file_name(format!("{}.png", self.history.project().active().name))
+            .save_file()
+        else {
+            return;
+        };
+        let project = self.history.project().clone();
+        let t = self.player.playhead();
+        match kompo_engine::export::export_still(&project, project.active_sequence, t, &path, &mut self.player.renderer) {
+            Ok(()) => self.notify(format!("Saved frame to {}", path.display())),
+            Err(e) => self.notify(format!("Export frame failed: {e}")),
+        }
     }
 
     // ------------------------------------------------------------------ views
@@ -816,6 +846,20 @@ impl KompoApp {
                 ui.separator();
                 if item(ui, "Import…", "Ctrl+I") {
                     self.import_dialog();
+                    ui.close();
+                }
+                ui.separator();
+                if item(ui, "Export Media…", "Ctrl+M") {
+                    self.export.open_for(self.history.project());
+                    ui.close();
+                }
+                if item(ui, "Export Frame…", "Ctrl+Shift+E") {
+                    self.export_frame_dialog();
+                    ui.close();
+                }
+                if item(ui, "Render Queue", "") {
+                    self.export.queue();
+                    self.export.show_queue = true;
                     ui.close();
                 }
                 if item(ui, "Export EDL…", "") {
@@ -1148,6 +1192,10 @@ impl KompoApp {
             .frame(egui::Frame::new().fill(theme::BG_PANEL))
             .show(ui, |ui| self.page_bar(ui));
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG_PANEL)).show(ui, |ui| self.page_content(ui));
+        if let Some(msg) = self.export.dialog(ui, self.history.project()) {
+            self.notify(msg);
+        }
+        self.export.queue_window(ui);
         self.close_guard(ui);
         self.autosave();
     }

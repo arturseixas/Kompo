@@ -2099,6 +2099,7 @@ name = "kompo-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs",
  "eframe",
  "egui",
  "egui-wgpu",
