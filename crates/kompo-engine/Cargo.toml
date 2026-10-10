@@ -1,0 +1,31 @@
+[package]
+name = "kompo-engine"
+description = "Orquestração headless do Kompo: reprodução, render de timeline e fila de exportação"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kompo-core.workspace = true
+kompo-media.workspace = true
+kompo-gpu.workspace = true
+kompo-audio.workspace = true
+kompo-color.workspace = true
+kompo-motion.workspace = true
+kompo-ofx.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+env_logger.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

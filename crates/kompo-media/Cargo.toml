@@ -1,0 +1,29 @@
+[package]
+name = "kompo-media"
+description = "Decode, encode, proxies e cache de mídia (FFmpeg via bindings)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kompo-core.workspace = true
+ffmpeg-next.workspace = true
+ffmpeg-sys-next.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+image.workspace = true
+exr.workspace = true
+half.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

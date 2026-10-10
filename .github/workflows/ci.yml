@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # no sound card on runners: the audio engine uses its silent real-time clock
+  KOMPO_NULL_AUDIO: "1"
+
+jobs:
+  linux:
+    name: Linux (fmt, clippy, tests on lavapipe)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config clang libclang-dev ffmpeg \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev \
+            libasound2-dev mesa-vulkan-drivers libvulkan1 \
+            libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests (GPU tests run on Mesa lavapipe)
+        run: cargo test --workspace
+        env:
+          WGPU_BACKEND: vulkan
+
+  macos:
+    name: macOS (build + tests on Metal)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install ffmpeg pkgconf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+
+  windows:
+    name: Windows (build + tests, LGPL FFmpeg)
+    runs-on: windows-2022
+    env:
+      FFMPEG_DIR: ${{ github.workspace }}\ffmpeg
+    steps:
+      - uses: actions/checkout@v4
+      - name: FFmpeg (LGPL shared build)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-lgpl-shared-7.1.zip"
+          Invoke-WebRequest $url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-tmp
+          Move-Item (Get-ChildItem ffmpeg-tmp)[0].FullName ffmpeg
+          "$env:GITHUB_WORKSPACE\ffmpeg\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace
+      - run: cargo test --workspace

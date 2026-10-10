@@ -1,0 +1,20 @@
+[package]
+name = "kompo-color"
+description = "Ciência de cor do Kompo: espaços, transferências, LUTs, configs OpenColorIO, correção"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kompo-core.workspace = true
+thiserror.workspace = true
+log.workspace = true
+glam.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

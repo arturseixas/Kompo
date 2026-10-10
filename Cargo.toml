@@ -1,0 +1,95 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/kompo-core",
+    "crates/kompo-media",
+    "crates/kompo-gpu",
+    "crates/kompo-audio",
+    "crates/kompo-color",
+    "crates/kompo-motion",
+    "crates/kompo-ofx",
+    "crates/kompo-engine",
+    "crates/kompo-app",
+]
+default-members = ["crates/kompo-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+authors = ["Kompo contributors"]
+repository = "https://github.com/arturseixas/kompo"
+publish = false
+
+[workspace.dependencies]
+kompo-core = { path = "crates/kompo-core" }
+kompo-media = { path = "crates/kompo-media" }
+kompo-gpu = { path = "crates/kompo-gpu" }
+kompo-audio = { path = "crates/kompo-audio" }
+kompo-color = { path = "crates/kompo-color" }
+kompo-motion = { path = "crates/kompo-motion" }
+kompo-ofx = { path = "crates/kompo-ofx" }
+kompo-engine = { path = "crates/kompo-engine" }
+
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+imbl = { version = "7", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+rayon = "1"
+bytemuck = { version = "1", features = ["derive"] }
+half = { version = "2", features = ["bytemuck"] }
+glam = { version = "0.34", features = ["bytemuck", "serde"] }
+pollster = "1"
+smallvec = "1"
+quick-xml = "0.42"
+
+wgpu = "30"
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland", "accesskit"] }
+egui = "0.36"
+egui-wgpu = "0.36"
+
+ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
+ffmpeg-sys-next = { version = "9", default-features = false, features = ["avcodec", "avformat", "swscale", "swresample"] }
+
+cpal = "0.18"
+symphonia = { version = "0.6", features = ["all"] }
+rubato = "5"
+ebur128 = "0.1"
+realfft = "3"
+rtrb = "0.4"
+
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+exr = "1"
+libloading = "0.9"
+tiny-skia = "0.12"
+lyon = "1"
+ab_glyph = "0.2"
+rfd = "0.17"
+dirs = "7"
+criterion = "0.8"
+tempfile = "3"
+
+[workspace.lints.clippy]
+# DSP, codec and GPU helpers naturally take many scalar parameters.
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+debug = "line-tables-only"
+lto = "thin"
+codegen-units = 4
+
+[profile.bench]
+debug = "line-tables-only"

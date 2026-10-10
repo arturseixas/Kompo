@@ -1,0 +1,43 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  KOMPO_NULL_AUDIO: "1"
+
+jobs:
+  bench:
+    name: Performance targets (docs/PERFORMANCE.md)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config clang libclang-dev ffmpeg \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev \
+            libasound2-dev mesa-vulkan-drivers libvulkan1 \
+            libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p kompo-engine --bin kompo-bench
+      - name: Run (quick)
+        # Hardware-dependent targets (integrated GPU, hardware decode) are
+        # reported but do not fail the job on GPU-less runners; non-hardware
+        # targets (UI never blocks, no memory growth, project open time) do.
+        run: ./target/release/kompo-bench --quick --strict --out bench-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-results
+          path: |
+            bench-out/results.json
+            bench-out/results.md
