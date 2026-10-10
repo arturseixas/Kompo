@@ -92,8 +92,10 @@ impl Drop for HwDevice {
 static HW_UNAVAILABLE: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
 
 fn try_hw_device(codec: *const sys::AVCodec) -> Option<HwDevice> {
+    // Serialized: probing toggles FFmpeg's global log level.
+    let mut unavailable = HW_UNAVAILABLE.lock().unwrap();
     for &kind in hw_candidates() {
-        if HW_UNAVAILABLE.lock().unwrap().contains(&(kind as i32)) {
+        if unavailable.contains(&(kind as i32)) {
             continue;
         }
         let mut i = 0;
@@ -116,7 +118,7 @@ fn try_hw_device(codec: *const sys::AVCodec) -> Option<HwDevice> {
             if r >= 0 && !buf.is_null() {
                 return Some(HwDevice { buf, kind, pix_fmt: cfg.pix_fmt });
             }
-            HW_UNAVAILABLE.lock().unwrap().push(kind as i32);
+            unavailable.push(kind as i32);
             break;
         }
     }

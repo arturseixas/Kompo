@@ -10,9 +10,11 @@
 pub mod animation;
 pub mod audio;
 pub mod color;
+pub mod edit;
 pub mod effects;
 pub mod history;
 pub mod id;
+pub mod interchange;
 pub mod media;
 pub mod motion;
 pub mod project;

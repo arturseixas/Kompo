@@ -28,12 +28,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release -p kompo-engine --bin kompo-bench
+        run: cargo build --release -p kompo-engine --bin kompo-bench -p kompo-app --bin kompo-ui-bench
       - name: Run (quick)
         # Hardware-dependent targets (integrated GPU, hardware decode) are
         # reported but do not fail the job on GPU-less runners; non-hardware
         # targets (UI never blocks, no memory growth, project open time) do.
         run: ./target/release/kompo-bench --quick --strict --out bench-out
+      - name: UI timeline benchmark (5 000 clips)
+        run: ./target/release/kompo-ui-bench --strict --out bench-out
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -41,3 +43,4 @@ jobs:
           path: |
             bench-out/results.json
             bench-out/results.md
+            bench-out/ui-results.md

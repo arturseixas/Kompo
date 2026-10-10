@@ -1,16 +1,25 @@
-//! Application state and top-level layout.
+//! Application state, commands, shortcuts and page layout.
 
+use crate::inspector;
+use crate::media_pool::{self, PoolAction, PoolState};
 use crate::theme;
+use crate::timeline::{TimelineEnv, TimelineState, Tool};
 use crate::viewer::{self, Viewer};
 use crate::widgets;
-use egui::{Key, Modifiers, Rect, Sense, Ui, Vec2};
+use egui::{Key, Modifiers, Rect, RichText, Ui, Vec2};
 use kompo_engine::Player;
 use kompo_engine::import;
+use kompo_engine::kompo_core::edit::{self, PlaceMode};
 use kompo_engine::kompo_core::history::History;
+use kompo_engine::kompo_core::id::{ClipId, LinkId, MediaId};
 use kompo_engine::kompo_core::project::Project;
-use kompo_engine::kompo_core::time::Time;
+use kompo_engine::kompo_core::time::{Time, TimeRange};
+use kompo_engine::kompo_core::timeline::{Clip, ClipSource, TrackKind, TrackRef};
 use kompo_engine::kompo_gpu::{GpuContext, Renderer};
+use kompo_engine::project_io;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -48,18 +57,31 @@ pub struct Launch {
     pub page: Option<Page>,
     pub play: bool,
     pub seek: Option<f64>,
+    pub select_first: bool,
+    /// Build a multicam from the files given on the command line (demo/testing).
+    pub multicam: bool,
 }
+
+const AUTOSAVE_EVERY: Duration = Duration::from_secs(180);
 
 pub struct KompoApp {
     pub history: History,
     pub player: Player,
     pub viewer: Viewer,
     pub page: Page,
-    pub status: Option<(String, std::time::Instant)>,
+    pub timeline: TimelineState,
+    pub pool: PoolState,
+    pub project_path: Option<PathBuf>,
+    pub offline: HashSet<MediaId>,
+    pub status: Option<(String, Instant)>,
+    clipboard: Vec<(TrackRef, Clip)>,
     launch: Launch,
     frame_count: u32,
     screenshot_requested: bool,
     render_state: Option<egui_wgpu::RenderState>,
+    close_dialog: bool,
+    allow_close: bool,
+    last_autosave: Instant,
 }
 
 impl KompoApp {
@@ -68,24 +90,59 @@ impl KompoApp {
         let ctx = cc.wgpu_render_state.as_ref().map(|rs| GpuContext::from_existing(&rs.adapter, rs.device.clone(), rs.queue.clone()));
         let renderer = Renderer::auto(ctx);
         log::info!("renderer: {}", renderer.name());
-        let player = Player::new(renderer);
+        let mut app = Self::with_renderer(renderer, launch.clone());
+        app.render_state = cc.wgpu_render_state.clone();
+        app
+    }
+
+    /// Headless construction (tests, UI benchmark).
+    pub fn with_renderer(renderer: Renderer, launch: Launch) -> Self {
         let mut app = Self {
             history: History::new(Project::new("Untitled")),
-            player,
+            player: Player::new(renderer),
             viewer: Viewer::new(),
             page: launch.page.unwrap_or(Page::Cut),
+            timeline: TimelineState::default(),
+            pool: PoolState::default(),
+            project_path: None,
+            offline: HashSet::new(),
             status: None,
+            clipboard: Vec::new(),
             frame_count: 0,
             screenshot_requested: false,
-            render_state: cc.wgpu_render_state.clone(),
+            render_state: None,
+            close_dialog: false,
+            allow_close: false,
+            last_autosave: Instant::now(),
             launch: launch.clone(),
         };
-        for f in &launch.files {
-            app.import(f);
+        if launch.multicam && launch.files.len() >= 2 {
+            let mut ids = Vec::new();
+            for f in &launch.files {
+                if let Ok(a) = import::probe_asset(f) {
+                    let (id, p) = (a.id, a.path.clone());
+                    app.history.edit("Import", |pr| {
+                        pr.add_media(a);
+                        import::match_sequence_to(pr, id);
+                    });
+                    app.player.audio_cache.ensure(id, &p, 0);
+                    ids.push(id);
+                }
+            }
+            app.create_multicam(ids, project_io::MulticamAlign::InPoints);
+        } else {
+            for f in &launch.files {
+                app.open_path(f);
+            }
         }
         app.sync_player();
         if let Some(s) = launch.seek {
             app.player.seek(Time::from_seconds(s));
+        }
+        if launch.select_first
+            && let Some(c) = app.history.project().active().video_tracks.iter().flat_map(|t| t.clips.iter()).next()
+        {
+            app.timeline.selection = edit::with_linked(app.history.project().active(), &[c.id]);
         }
         if launch.play {
             app.player.play();
@@ -93,13 +150,94 @@ impl KompoApp {
         app
     }
 
-    fn sync_player(&mut self) {
+    pub fn sync_player(&mut self) {
         let rev = self.history.revision();
         self.player.set_project(self.history.project(), rev);
+        let seq = self.history.project().active();
+        self.timeline.selection.retain(|id| seq.clip(*id).is_some());
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
-        self.status = Some((msg.into(), std::time::Instant::now()));
+        let msg = msg.into();
+        log::info!("{msg}");
+        self.status = Some((msg, Instant::now()));
+    }
+
+    // ------------------------------------------------------------------ files
+
+    /// Opens a project, an interchange file, or imports media, by extension.
+    pub fn open_path(&mut self, path: &Path) {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        match ext.as_str() {
+            "kompo" => self.open_project(path),
+            "edl" => self.import_interchange(path, false),
+            "fcpxml" | "xml" => self.import_interchange(path, true),
+            _ => self.import(path),
+        }
+    }
+
+    pub fn open_project(&mut self, path: &Path) {
+        match project_io::open(path) {
+            Ok(o) => {
+                self.offline = o.offline.iter().copied().collect();
+                self.history.reset(o.project);
+                self.project_path = Some(path.to_path_buf());
+                self.timeline = TimelineState::default();
+                self.pool = PoolState::default();
+                self.player.seek(Time::ZERO);
+                self.sync_player();
+                let off = if o.offline.is_empty() { String::new() } else { format!(" · {} offline", o.offline.len()) };
+                self.notify(format!("Opened {} in {:.0} ms{off}", path.display(), o.load_ms));
+            }
+            Err(e) => self.notify(format!("Cannot open {}: {e}", path.display())),
+        }
+    }
+
+    fn save_to(&mut self, path: PathBuf) {
+        let mut path = path;
+        if path.extension().is_none() {
+            path.set_extension("kompo");
+        }
+        if self.history.project().name == "Untitled" {
+            let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            self.history.view_change(|p| p.name = name);
+        }
+        match project_io::save(self.history.project(), &path) {
+            Ok(()) => {
+                self.history.mark_saved();
+                self.notify(format!("Saved {}", path.display()));
+                self.project_path = Some(path);
+            }
+            Err(e) => self.notify(format!("Save failed: {e}")),
+        }
+    }
+
+    pub fn save(&mut self) {
+        match self.project_path.clone() {
+            Some(p) => self.save_to(p),
+            None => self.save_as(),
+        }
+    }
+
+    pub fn save_as(&mut self) {
+        if let Some(p) = rfd::FileDialog::new().add_filter("Kompo project", &["kompo"]).set_file_name("Untitled.kompo").save_file() {
+            self.save_to(p);
+        }
+    }
+
+    fn open_dialog(&mut self) {
+        if let Some(p) = rfd::FileDialog::new().add_filter("Kompo project", &["kompo"]).pick_file() {
+            self.open_project(&p);
+        }
+    }
+
+    fn new_project(&mut self) {
+        self.history.reset(Project::new("Untitled"));
+        self.project_path = None;
+        self.offline.clear();
+        self.timeline = TimelineState::default();
+        self.player.seek(Time::ZERO);
+        self.sync_player();
     }
 
     /// Imports a media file and appends it to the active sequence.
@@ -108,16 +246,17 @@ impl KompoApp {
             Ok(asset) => {
                 let name = asset.name.clone();
                 let id = asset.id;
-                let path = asset.path.clone();
+                let p = asset.path.clone();
                 let has_audio = asset.info.has_audio();
-                self.history.edit(&format!("Import {name}"), |p| {
-                    p.add_media(asset);
-                    import::match_sequence_to(p, id);
-                    import::append_to_sequence(p, id);
+                self.history.edit(&format!("Import {name}"), |pr| {
+                    pr.add_media(asset);
+                    import::match_sequence_to(pr, id);
+                    import::append_to_sequence(pr, id);
                 });
                 if has_audio {
-                    self.player.audio_cache.ensure(id, &path, 0);
+                    self.player.audio_cache.ensure(id, &p, 0);
                 }
+                self.timeline.request_fit();
                 self.notify(format!("Imported {name}"));
             }
             Err(e) => self.notify(format!("Cannot import {}: {e}", path.display())),
@@ -127,92 +266,650 @@ impl KompoApp {
 
     fn import_dialog(&mut self) {
         let files = rfd::FileDialog::new()
-            .set_title("Import media")
+            .set_title("Import")
             .add_filter(
                 "Media",
                 &["mp4", "mov", "mkv", "webm", "mxf", "avi", "m4v", "wav", "flac", "aac", "m4a", "mp3", "png", "jpg", "jpeg", "exr"],
             )
+            .add_filter("Timelines", &["edl", "fcpxml", "xml"])
             .pick_files();
         for f in files.unwrap_or_default() {
-            self.import(&f);
+            self.open_path(&f);
         }
     }
 
+    fn import_interchange(&mut self, path: &Path, fcpxml: bool) {
+        let mut project = self.history.project().clone();
+        let r = if fcpxml { project_io::import_fcpxml(&mut project, path) } else { project_io::import_edl(&mut project, path) };
+        match r {
+            Ok((_, missing)) => {
+                self.history.edit("Import Timeline", |p| *p = project);
+                self.timeline.request_fit();
+                let msg = if missing.is_empty() {
+                    format!("Imported {}", path.display())
+                } else {
+                    format!(
+                        "Imported {} ({} clips offline: {})",
+                        path.display(),
+                        missing.len(),
+                        missing.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+                    )
+                };
+                self.notify(msg);
+            }
+            Err(e) => self.notify(format!("Cannot import {}: {e}", path.display())),
+        }
+        self.sync_player();
+    }
+
+    fn export_interchange(&mut self, fcpxml: bool) {
+        let (ext, label) = if fcpxml { ("fcpxml", "Final Cut Pro XML") } else { ("edl", "CMX3600 EDL") };
+        let name = format!("{}.{ext}", self.history.project().active().name);
+        if let Some(p) = rfd::FileDialog::new().add_filter(label, &[ext]).set_file_name(name).save_file() {
+            let r = if fcpxml {
+                project_io::export_fcpxml(self.history.project(), &p)
+            } else {
+                project_io::export_edl(self.history.project(), &p)
+            };
+            match r {
+                Ok(()) => self.notify(format!("Exported {}", p.display())),
+                Err(e) => self.notify(format!("Export failed: {e}")),
+            }
+        }
+    }
+
+    fn autosave(&mut self) {
+        if !self.history.is_dirty() || self.last_autosave.elapsed() < AUTOSAVE_EVERY {
+            return;
+        }
+        self.last_autosave = Instant::now();
+        let dir = project_io::autosave_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let name: String = self.history.project().name.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+        let path = dir.join(format!("{name}-autosave.kompo"));
+        if let Err(e) = self.history.project().save(&path) {
+            log::warn!("autosave failed: {e}");
+        }
+    }
+
+    // --------------------------------------------------------------- editing
+
+    fn edit(&mut self, label: &str, f: impl FnOnce(&mut Project) -> Result<(), edit::EditError>) {
+        if let Err(e) = self.history.apply(label, f) {
+            self.notify(format!("{label}: {e}"));
+        }
+        self.sync_player();
+    }
+
+    fn targets(&self) -> (TrackRef, TrackRef) {
+        (TrackRef::video(self.timeline.video_target), TrackRef::audio(self.timeline.audio_target))
+    }
+
+    /// Places media at `at` on the target tracks (`,` insert / `.` overwrite / drops).
+    pub fn place_media(&mut self, media: &[MediaId], at: Time, vtrack: TrackRef, atrack: TrackRef, mode: PlaceMode) {
+        let p = self.history.project().clone();
+        let rate = p.active().format.frame_rate;
+        let mut items = Vec::new();
+        let mut t = at;
+        for m in media {
+            let Some(asset) = p.media(*m) else { continue };
+            let (v, a) = import::clips_for(asset, t, Time::ZERO, import::default_clip_duration(asset), rate);
+            let mut end = t;
+            if let Some(v) = v {
+                end = end.max(v.end());
+                items.push((vtrack, v));
+            }
+            if let Some(a) = a {
+                end = end.max(a.end());
+                items.push((atrack, a));
+            }
+            t = end;
+            if asset.info.has_audio() {
+                self.player.audio_cache.ensure(asset.id, &asset.path, 0);
+            }
+        }
+        if items.is_empty() {
+            return;
+        }
+        let label = if mode == PlaceMode::Insert { "Insert" } else { "Overwrite" };
+        self.edit(label, |p| edit::place(p.active_mut(), items, mode));
+        self.player.seek(t);
+    }
+
+    fn mark_in(&mut self) {
+        let t = self.player.playhead();
+        self.history.edit("Mark In", |p| p.active_mut().in_point = Some(t));
+    }
+
+    fn mark_out(&mut self) {
+        let t = self.player.playhead() + self.history.project().active().frame_duration();
+        self.history.edit("Mark Out", |p| p.active_mut().out_point = Some(t));
+    }
+
+    fn mark_clip(&mut self) {
+        let t = self.player.playhead();
+        let seq = self.history.project().active();
+        let r = TrackRef::video(self.timeline.video_target);
+        let clip = seq.track(r).and_then(|tr| tr.clip_at(t)).or_else(|| seq.all_tracks().find_map(|(_, tr)| tr.clip_at(t)));
+        if let Some(c) = clip.cloned() {
+            self.history.edit("Mark Clip", |p| {
+                let s = p.active_mut();
+                s.in_point = Some(c.start);
+                s.out_point = Some(c.end());
+            });
+        }
+    }
+
+    fn add_marker(&mut self) {
+        let t = self.player.playhead();
+        let n = self.history.project().active().markers.len() + 1;
+        self.history.edit("Add Marker", |p| {
+            edit::add_marker(p.active_mut(), t, &format!("Marker {n}"));
+        });
+    }
+
+    fn in_out(&self) -> Option<TimeRange> {
+        let s = self.history.project().active();
+        match (s.in_point, s.out_point) {
+            (Some(i), Some(o)) if o > i => Some(TimeRange::from_bounds(i, o)),
+            _ => None,
+        }
+    }
+
+    fn unlocked_tracks(&self) -> Vec<TrackRef> {
+        self.history.project().active().all_tracks().filter(|(_, t)| !t.locked).map(|(r, _)| r).collect()
+    }
+
+    fn add_edit(&mut self, all: bool) {
+        let t = self.player.playhead();
+        let tracks: Vec<TrackRef> = if all {
+            self.unlocked_tracks()
+        } else {
+            let seq = self.history.project().active();
+            let (v, a) = self.targets();
+            let mut tr = vec![v, a];
+            for r in [v, a] {
+                if let Some(c) = seq.track(r).and_then(|t0| t0.clip_at(t)) {
+                    for id in edit::with_linked(seq, &[c.id]) {
+                        if let Some((lr, _, lc)) = seq.find_clip(id)
+                            && lc.contains(t)
+                            && !tr.contains(&lr)
+                        {
+                            tr.push(lr);
+                        }
+                    }
+                }
+            }
+            tr
+        };
+        self.edit("Add Edit", |p| edit::split(p.active_mut(), t, Some(&tracks)).map(|_| ()));
+    }
+
+    fn delete_selection(&mut self, ripple: bool) {
+        let ids = self.timeline.selection.clone();
+        if ids.is_empty() {
+            return;
+        }
+        if ripple {
+            self.edit("Ripple Delete", |p| edit::ripple_delete(p.active_mut(), &ids));
+        } else {
+            self.edit("Delete", |p| edit::lift_clips(p.active_mut(), &ids));
+        }
+        self.timeline.selection.clear();
+    }
+
+    fn lift_or_extract(&mut self, extract: bool) {
+        let Some(range) = self.in_out() else {
+            self.notify("Set In and Out points first (I / O)");
+            return;
+        };
+        let tracks = self.unlocked_tracks();
+        let label = if extract { "Extract" } else { "Lift" };
+        self.edit(label, |p| {
+            let s = p.active_mut();
+            if extract {
+                edit::extract_range(s, range, &tracks)?;
+            } else {
+                edit::lift_range(s, range, &tracks)?;
+            }
+            s.in_point = None;
+            s.out_point = None;
+            Ok(())
+        });
+        if extract {
+            self.player.seek(range.start);
+        }
+    }
+
+    fn copy(&mut self) {
+        let seq = self.history.project().active();
+        self.clipboard = self.timeline.selection.iter().filter_map(|id| seq.find_clip(*id).map(|(r, _, c)| (r, c.clone()))).collect();
+        if !self.clipboard.is_empty() {
+            self.notify(format!("Copied {} clip(s)", self.clipboard.len()));
+        }
+    }
+
+    fn paste(&mut self) {
+        if self.clipboard.is_empty() {
+            return;
+        }
+        let at = self.player.playhead();
+        let first = self.clipboard.iter().map(|(_, c)| c.start).min().unwrap();
+        let mut links: HashMap<LinkId, LinkId> = HashMap::new();
+        let items: Vec<(TrackRef, Clip)> = self
+            .clipboard
+            .iter()
+            .map(|(r, c)| {
+                let mut c = c.clone();
+                c.id = ClipId::new();
+                c.start = at + (c.start - first);
+                c.link = c.link.map(|l| *links.entry(l).or_default());
+                (*r, c)
+            })
+            .collect();
+        let end = items.iter().map(|(_, c)| c.end()).max().unwrap_or(at);
+        self.edit("Paste", |p| edit::place(p.active_mut(), items, PlaceMode::Overwrite));
+        self.player.seek(end);
+    }
+
+    fn switch_angle(&mut self, angle: usize) {
+        let t = self.player.playhead();
+        let Some((_, mc, _)) = self.player.multicam_at_playhead() else { return };
+        let n = self.history.project().multicams.get(&mc).map(|m| m.angles.len()).unwrap_or(0);
+        if angle >= n {
+            return;
+        }
+        self.edit("Switch Angle", |p| edit::switch_angle(p.active_mut(), t, angle).map(|_| ()));
+    }
+
+    fn create_multicam(&mut self, media: Vec<MediaId>, align: project_io::MulticamAlign) {
+        let mut p = self.history.project().clone();
+        let name = format!("Multicam {}", p.multicams.len() + 1);
+        match project_io::create_multicam(&mut p, &self.player.audio_cache, &name, &media, align) {
+            Ok(id) => {
+                let at = self.player.playhead();
+                let mc = p.multicams.get(&id).cloned().unwrap();
+                let (v, a) = self.targets();
+                let link = LinkId::new();
+                let rate = p.active().format.frame_rate;
+                let mut vc =
+                    Clip::new(&name, ClipSource::Multicam { multicam: id, angle: 0 }, at, mc.duration.snap_to_frame(rate), Time::ZERO);
+                vc.link = Some(link);
+                let mut ac = vc.clone();
+                ac.id = ClipId::new();
+                self.history.edit("Create Multicam", |pr| {
+                    *pr = p;
+                    let _ = edit::place(pr.active_mut(), vec![(v, vc), (a, ac)], PlaceMode::Overwrite);
+                });
+                self.viewer.multicam = true;
+                self.sync_player();
+                self.notify(format!("{name} created — press 1–{} to cut between angles", mc.angles.len().min(9)));
+            }
+            Err(e) => self.notify(format!("Cannot create multicam: {e}")),
+        }
+    }
+
+    fn pool_action(&mut self, a: PoolAction) {
+        let (v, au) = self.targets();
+        let ph = self.player.playhead();
+        match a {
+            PoolAction::Append(m) => {
+                let seq = self.history.project().active();
+                let end = seq.duration().snap_to_frame(seq.format.frame_rate);
+                self.place_media(&m, end, v, au, PlaceMode::Overwrite);
+            }
+            PoolAction::Insert(m) => self.place_media(&m, ph, v, au, PlaceMode::Insert),
+            PoolAction::Overwrite(m) => self.place_media(&m, ph, v, au, PlaceMode::Overwrite),
+            PoolAction::Multicam(m, align) => self.create_multicam(m, align),
+            PoolAction::Relink(id) => {
+                if let Some(path) = rfd::FileDialog::new().set_title("Relink media").pick_file() {
+                    let mut p = self.history.project().clone();
+                    match project_io::relink(&mut p, id, &path) {
+                        Ok(()) => {
+                            self.history.edit("Relink", |pr| *pr = p);
+                            self.offline.remove(&id);
+                            self.sync_player();
+                        }
+                        Err(e) => self.notify(format!("Relink failed: {e}")),
+                    }
+                }
+            }
+            PoolAction::Remove(ids) => {
+                self.history.edit("Remove Media", |p| {
+                    for id in &ids {
+                        p.media.remove(id);
+                    }
+                });
+                self.pool.selection.clear();
+            }
+        }
+    }
+
+    fn undo(&mut self) {
+        if self.history.undo() {
+            let l = self.history.redo_label().unwrap_or("").to_string();
+            self.notify(format!("Undo {l}"));
+        }
+        self.sync_player();
+    }
+
+    fn redo(&mut self) {
+        if self.history.redo() {
+            let l = self.history.undo_label().unwrap_or("").to_string();
+            self.notify(format!("Redo {l}"));
+        }
+        self.sync_player();
+    }
+
+    fn zoom_key(&mut self, factor: f32) {
+        let ph = self.player.playhead().seconds();
+        let x = ((ph - self.timeline.scroll_x) as f32) * self.timeline.px_per_sec;
+        self.timeline.zoom(factor, ph, x);
+    }
+
+    // ------------------------------------------------------------- shortcuts
+
+    /// Premiere Pro-style keyboard map.
     fn shortcuts(&mut self, ui: &Ui) {
         if ui.ctx().egui_wants_keyboard_input() {
             return;
         }
         let input = ui.input(|i| i.clone());
-        let pressed = |k: Key| input.key_pressed(k);
         let m = input.modifiers;
-        if pressed(Key::Space) {
+        let key = |k: Key| input.key_pressed(k) && m.is_none();
+        let cmd = |k: Key| input.key_pressed(k) && m.matches_exact(Modifiers::COMMAND);
+        let cmd_shift = |k: Key| input.key_pressed(k) && m.matches_exact(Modifiers::COMMAND | Modifiers::SHIFT);
+        let shift = |k: Key| input.key_pressed(k) && m.matches_exact(Modifiers::SHIFT);
+        let alt = |k: Key| input.key_pressed(k) && m.matches_exact(Modifiers::ALT);
+
+        // transport
+        if key(Key::Space) {
             self.player.toggle();
         }
-        if pressed(Key::L) && m.is_none() {
+        if key(Key::L) {
             self.player.shuttle(1);
         }
-        if pressed(Key::K) && m.is_none() {
+        if key(Key::K) {
             self.player.shuttle(0);
         }
-        if pressed(Key::J) && m.is_none() {
+        if key(Key::J) {
             self.player.shuttle(-1);
         }
-        if pressed(Key::ArrowLeft) && m.is_none() {
+        if key(Key::ArrowLeft) {
             self.player.step(-1);
         }
-        if pressed(Key::ArrowRight) && m.is_none() {
+        if key(Key::ArrowRight) {
             self.player.step(1);
         }
-        if pressed(Key::Home) {
+        if shift(Key::ArrowLeft) {
+            self.player.step(-5);
+        }
+        if shift(Key::ArrowRight) {
+            self.player.step(5);
+        }
+        if key(Key::Home) {
             self.player.pause();
             self.player.seek(Time::ZERO);
         }
-        if pressed(Key::End) {
+        if key(Key::End) {
             self.player.pause();
-            let end = self.player.sequence().duration();
+            let end = self.history.project().active().duration();
             self.player.seek(end);
         }
-        if m.matches_logically(Modifiers::COMMAND) && pressed(Key::I) {
-            self.import_dialog();
+        if key(Key::ArrowUp)
+            && let Some(t) = edit::prev_edit(self.history.project().active(), self.player.playhead())
+        {
+            self.player.seek(t);
         }
-        if m.matches_logically(Modifiers::COMMAND) && pressed(Key::Z) {
-            self.history.undo();
-            self.sync_player();
+        if key(Key::ArrowDown)
+            && let Some(t) = edit::next_edit(self.history.project().active(), self.player.playhead())
+        {
+            self.player.seek(t);
         }
-        if m.matches_logically(Modifiers::COMMAND | Modifiers::SHIFT) && pressed(Key::Z) {
-            self.history.redo();
-            self.sync_player();
+        // tools
+        for tool in Tool::ALL {
+            if let Some(k) = Key::from_name(tool.key())
+                && key(k)
+            {
+                self.timeline.tool = tool;
+            }
         }
-        let keys = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5];
-        for (i, k) in keys.iter().enumerate() {
-            if m.shift && !m.command && pressed(*k) {
+        if key(Key::S) {
+            self.timeline.snapping = !self.timeline.snapping;
+            self.notify(if self.timeline.snapping { "Snapping on" } else { "Snapping off" });
+        }
+        // marks
+        if key(Key::I) {
+            self.mark_in();
+        }
+        if key(Key::O) {
+            self.mark_out();
+        }
+        if key(Key::X) {
+            self.mark_clip();
+        }
+        if cmd_shift(Key::X) {
+            self.history.edit("Clear In/Out", |p| {
+                let s = p.active_mut();
+                s.in_point = None;
+                s.out_point = None;
+            });
+        }
+        if key(Key::M) {
+            self.add_marker();
+        }
+        // editing
+        if key(Key::Delete) || key(Key::Backspace) {
+            self.delete_selection(false);
+        }
+        if shift(Key::Delete) || alt(Key::Backspace) || shift(Key::Backspace) {
+            self.delete_selection(true);
+        }
+        if key(Key::Semicolon) {
+            self.lift_or_extract(false);
+        }
+        if key(Key::Quote) {
+            self.lift_or_extract(true);
+        }
+        if cmd(Key::K) {
+            self.add_edit(false);
+        }
+        if cmd_shift(Key::K) {
+            self.add_edit(true);
+        }
+        if key(Key::Comma) && !self.pool.selection.is_empty() {
+            self.pool_action(PoolAction::Insert(self.pool.selection.clone()));
+        }
+        if key(Key::Period) && !self.pool.selection.is_empty() {
+            self.pool_action(PoolAction::Overwrite(self.pool.selection.clone()));
+        }
+        if cmd(Key::A) {
+            self.timeline.selection =
+                self.history.project().active().all_tracks().flat_map(|(_, t)| t.clips.iter().map(|c| c.id)).collect();
+        }
+        if cmd_shift(Key::A) {
+            self.timeline.selection.clear();
+        }
+        if cmd(Key::C) {
+            self.copy();
+        }
+        if cmd(Key::V) {
+            self.paste();
+        }
+        if cmd(Key::L) {
+            let ids = self.timeline.selection.clone();
+            let linked = ids.iter().any(|id| self.history.project().active().clip(*id).is_some_and(|c| c.link.is_some()));
+            self.edit("Link", |p| if linked { edit::unlink(p.active_mut(), &ids) } else { edit::link(p.active_mut(), &ids) });
+        }
+        // multicam angles (1-9) and pages (Shift+1..5)
+        let digits = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
+        for (i, k) in digits.iter().enumerate() {
+            if key(*k) {
+                self.switch_angle(i);
+            }
+            if shift(*k) && i < Page::ALL.len() {
                 self.page = Page::ALL[i];
             }
         }
+        if shift(Key::Num0) {
+            self.viewer.multicam = !self.viewer.multicam;
+        }
+        // zoom
+        if key(Key::Equals) || key(Key::Plus) {
+            self.zoom_key(1.5);
+        }
+        if key(Key::Minus) {
+            self.zoom_key(1.0 / 1.5);
+        }
+        if key(Key::Backslash) {
+            self.timeline.request_fit();
+        }
+        // history and files
+        if cmd(Key::Z) {
+            self.undo();
+        }
+        if cmd_shift(Key::Z) || cmd(Key::Y) {
+            self.redo();
+        }
+        if cmd(Key::S) {
+            self.save();
+        }
+        if cmd_shift(Key::S) {
+            self.save_as();
+        }
+        if cmd(Key::O) {
+            self.open_dialog();
+        }
+        if cmd(Key::N) {
+            self.new_project();
+        }
+        if cmd(Key::I) {
+            self.import_dialog();
+        }
     }
 
-    fn top_bar(&mut self, ui: &mut Ui) {
+    // ------------------------------------------------------------------ views
+
+    fn menu_bar(&mut self, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
             ui.add_space(theme::SPACE_3);
-            ui.label(egui::RichText::new(&self.history.project().name).font(theme::strong()).color(theme::TEXT));
-            if self.history.is_dirty() {
-                ui.label(egui::RichText::new("edited").font(theme::caption()).color(theme::TEXT_3));
-            }
+            let item =
+                |ui: &mut Ui, label: &str, shortcut: &str| -> bool { ui.add(egui::Button::new(label).shortcut_text(shortcut)).clicked() };
+            ui.menu_button(RichText::new("File").color(theme::TEXT_2), |ui| {
+                if item(ui, "New Project", "Ctrl+N") {
+                    self.new_project();
+                    ui.close();
+                }
+                if item(ui, "Open…", "Ctrl+O") {
+                    self.open_dialog();
+                    ui.close();
+                }
+                if item(ui, "Save", "Ctrl+S") {
+                    self.save();
+                    ui.close();
+                }
+                if item(ui, "Save As…", "Ctrl+Shift+S") {
+                    self.save_as();
+                    ui.close();
+                }
+                ui.separator();
+                if item(ui, "Import…", "Ctrl+I") {
+                    self.import_dialog();
+                    ui.close();
+                }
+                if item(ui, "Export EDL…", "") {
+                    self.export_interchange(false);
+                    ui.close();
+                }
+                if item(ui, "Export FCPXML…", "") {
+                    self.export_interchange(true);
+                    ui.close();
+                }
+            });
+            ui.menu_button(RichText::new("Edit").color(theme::TEXT_2), |ui| {
+                let undo = self.history.undo_label().map(|l| format!("Undo {l}")).unwrap_or_else(|| "Undo".into());
+                if ui.add_enabled(self.history.can_undo(), egui::Button::new(undo).shortcut_text("Ctrl+Z")).clicked() {
+                    self.undo();
+                    ui.close();
+                }
+                let redo = self.history.redo_label().map(|l| format!("Redo {l}")).unwrap_or_else(|| "Redo".into());
+                if ui.add_enabled(self.history.can_redo(), egui::Button::new(redo).shortcut_text("Ctrl+Shift+Z")).clicked() {
+                    self.redo();
+                    ui.close();
+                }
+                ui.separator();
+                if item(ui, "Add Edit", "Ctrl+K") {
+                    self.add_edit(false);
+                    ui.close();
+                }
+                if item(ui, "Add Edit to All Tracks", "Ctrl+Shift+K") {
+                    self.add_edit(true);
+                    ui.close();
+                }
+                if item(ui, "Delete", "Del") {
+                    self.delete_selection(false);
+                    ui.close();
+                }
+                if item(ui, "Ripple Delete", "Shift+Del") {
+                    self.delete_selection(true);
+                    ui.close();
+                }
+                if item(ui, "Lift", ";") {
+                    self.lift_or_extract(false);
+                    ui.close();
+                }
+                if item(ui, "Extract", "'") {
+                    self.lift_or_extract(true);
+                    ui.close();
+                }
+                ui.separator();
+                if item(ui, "Copy", "Ctrl+C") {
+                    self.copy();
+                    ui.close();
+                }
+                if item(ui, "Paste", "Ctrl+V") {
+                    self.paste();
+                    ui.close();
+                }
+            });
+            ui.menu_button(RichText::new("Mark").color(theme::TEXT_2), |ui| {
+                if item(ui, "Mark In", "I") {
+                    self.mark_in();
+                    ui.close();
+                }
+                if item(ui, "Mark Out", "O") {
+                    self.mark_out();
+                    ui.close();
+                }
+                if item(ui, "Mark Clip", "X") {
+                    self.mark_clip();
+                    ui.close();
+                }
+                if item(ui, "Add Marker", "M") {
+                    self.add_marker();
+                    ui.close();
+                }
+            });
             ui.add_space(theme::SPACE_5);
-            if widgets::text_button(ui, "Import", false).on_hover_text("Import media (Ctrl+I)").clicked() {
-                self.import_dialog();
+            ui.label(RichText::new(&self.history.project().name).font(theme::strong()).color(theme::TEXT));
+            if self.history.is_dirty() {
+                ui.label(RichText::new("edited").font(theme::caption()).color(theme::TEXT_3));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(theme::SPACE_3);
                 let decode = self.player.stats.hardware_decode.unwrap_or("software");
-                let info =
-                    format!("{} · decode {} · {:.1} ms", short_renderer(&self.player.renderer.name()), decode, self.viewer.render_ms);
-                ui.label(egui::RichText::new(info).font(theme::caption()).color(theme::TEXT_3));
+                let name = self.player.renderer.name();
+                let short = name.split(" (").next().unwrap_or(&name).to_string();
+                ui.label(
+                    RichText::new(format!("{short} · decode {decode} · {:.1} ms", self.viewer.render_ms))
+                        .font(theme::caption())
+                        .color(theme::TEXT_3),
+                );
                 if let Some((msg, at)) = &self.status
-                    && at.elapsed().as_secs_f32() < 4.0
+                    && at.elapsed().as_secs_f32() < 5.0
                 {
                     ui.add_space(theme::SPACE_5);
-                    ui.label(egui::RichText::new(msg).font(theme::caption()).color(theme::TEXT_2));
+                    ui.label(RichText::new(msg).font(theme::caption()).color(theme::TEXT_2));
                 }
             });
         });
@@ -222,74 +919,83 @@ impl KompoApp {
         ui.horizontal_centered(|ui| {
             let total: f32 = 5.0 * 80.0;
             ui.add_space(((ui.available_width() - total) / 2.0).max(0.0));
-            for p in Page::ALL {
-                if widgets::page_tab(ui, p.name(), self.page == p)
-                    .on_hover_text(format!("{} page (Shift+{})", p.name(), Page::ALL.iter().position(|x| *x == p).unwrap() + 1))
-                    .clicked()
-                {
+            for (i, p) in Page::ALL.into_iter().enumerate() {
+                if widgets::page_tab(ui, p.name(), self.page == p).on_hover_text(format!("{} page (Shift+{})", p.name(), i + 1)).clicked() {
                     self.page = p;
                 }
             }
         });
     }
 
-    fn media_pool(&mut self, ui: &mut Ui) {
-        ui.add_space(theme::SPACE_3);
-        ui.label(egui::RichText::new("Media").font(theme::strong()).color(theme::TEXT_2));
-        ui.add_space(theme::SPACE_2);
-        let media: Vec<_> = self.history.project().media.values().cloned().collect();
-        for m in media {
-            let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), theme::ROW_HEIGHT * 1.6), Sense::click());
-            if resp.hovered() {
-                ui.painter().rect_filled(rect, theme::RADIUS_SM, theme::BG_HOVER);
-            }
-            widgets::label_at(ui, rect.left_center() + Vec2::new(theme::SPACE_2, -7.0), &m.name, theme::body(), theme::TEXT);
-            let detail = match &m.info.video {
-                Some(v) => {
-                    format!("{}×{} · {} · {:.2} fps · {}", v.width, v.height, v.codec, v.frame_rate.as_f64(), fmt_dur(m.info.duration))
+    fn tool_bar(&mut self, ui: &mut Ui) {
+        ui.horizontal_centered(|ui| {
+            ui.add_space(theme::SPACE_2);
+            for tool in Tool::ALL {
+                let tip = format!("{} tool ({})", tool.name(), tool.key());
+                if widgets::text_button(ui, tool.name(), self.timeline.tool == tool).on_hover_text(tip).clicked() {
+                    self.timeline.tool = tool;
                 }
-                None => format!("audio · {}", fmt_dur(m.info.duration)),
-            };
-            widgets::label_at(ui, rect.left_center() + Vec2::new(theme::SPACE_2, 8.0), &detail, theme::caption(), theme::TEXT_3);
-            if resp.double_clicked() {
-                let id = m.id;
-                self.history.edit("Append to timeline", |p| {
-                    import::append_to_sequence(p, id);
-                });
-                self.sync_player();
             }
-        }
+            ui.add_space(theme::SPACE_4);
+            if widgets::text_button(ui, "Snap", self.timeline.snapping).on_hover_text("Snapping (S)").clicked() {
+                self.timeline.snapping = !self.timeline.snapping;
+            }
+            if self.player.multicam_at_playhead().is_some()
+                && widgets::text_button(ui, "Multicam", self.viewer.multicam)
+                    .on_hover_text("Multicam view (Shift+0); 1–9 cut to angle")
+                    .clicked()
+            {
+                self.viewer.multicam = !self.viewer.multicam;
+            }
+        });
     }
 
-    fn timeline_strip(&mut self, ui: &mut Ui, rect: Rect) {
-        crate::timeline_strip::show(ui, rect, &mut self.player);
-    }
-
-    fn page_content(&mut self, ui: &mut Ui) {
+    pub fn page_content(&mut self, ui: &mut Ui) {
         let full = ui.available_rect_before_wrap();
         let has_media = !self.history.project().media.is_empty();
-        let pool_w = if has_media && self.page == Page::Cut { 260.0 } else { 0.0 };
-        let timeline_h = (full.height() * 0.32).clamp(140.0, 360.0);
+        let pool_w = if has_media && self.page == Page::Cut { 250.0 } else { 0.0 };
+        let has_sel = !self.timeline.selection.is_empty() && self.page == Page::Cut;
+        let insp_w = if has_sel { 290.0 } else { 0.0 };
+        let timeline_h = (full.height() * 0.42).clamp(160.0, 520.0);
         let transport_h = 36.0;
-        let pool_rect = Rect::from_min_size(full.min, Vec2::new(pool_w, full.height() - timeline_h));
-        let viewer_rect = Rect::from_min_max(
-            egui::pos2(full.left() + pool_w, full.top()),
-            egui::pos2(full.right(), full.bottom() - timeline_h - transport_h),
-        );
-        let transport_rect = Rect::from_min_max(
-            egui::pos2(full.left() + pool_w, viewer_rect.bottom()),
-            egui::pos2(full.right(), viewer_rect.bottom() + transport_h),
-        );
-        let timeline_rect = Rect::from_min_max(egui::pos2(full.left(), full.bottom() - timeline_h), full.max);
+        let toolbar_h = 26.0;
+        let upper_bottom = full.bottom() - timeline_h - toolbar_h;
+        let pool_rect = Rect::from_min_max(full.min, egui::pos2(full.left() + pool_w, upper_bottom));
+        let insp_rect = Rect::from_min_max(egui::pos2(full.right() - insp_w, full.top()), egui::pos2(full.right(), upper_bottom));
+        let viewer_rect =
+            Rect::from_min_max(egui::pos2(full.left() + pool_w, full.top()), egui::pos2(full.right() - insp_w, upper_bottom - transport_h));
+        let transport_rect =
+            Rect::from_min_max(egui::pos2(viewer_rect.left(), viewer_rect.bottom()), egui::pos2(viewer_rect.right(), upper_bottom));
+        let toolbar_rect = Rect::from_min_max(egui::pos2(full.left(), upper_bottom), egui::pos2(full.right(), upper_bottom + toolbar_h));
+        let timeline_rect = Rect::from_min_max(egui::pos2(full.left(), upper_bottom + toolbar_h), full.max);
 
         if pool_w > 0.0 {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(pool_rect.shrink2(Vec2::new(theme::SPACE_3, 0.0))));
-            egui::ScrollArea::vertical().id_salt("pool").show(&mut child, |ui| self.media_pool(ui));
+            let action = egui::ScrollArea::vertical()
+                .id_salt("pool")
+                .show(&mut child, |ui| {
+                    media_pool::show(ui, &mut self.pool, self.history.project(), &self.offline, &self.player.audio_cache)
+                })
+                .inner;
+            if let Some(a) = action {
+                self.pool_action(a);
+            }
             widgets::vline(ui, pool_rect.right(), pool_rect.top(), pool_rect.bottom());
+        }
+        if insp_w > 0.0 {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(insp_rect.shrink2(Vec2::new(theme::SPACE_4, 0.0))));
+            let before = self.history.revision();
+            egui::ScrollArea::vertical()
+                .id_salt("inspector")
+                .show(&mut child, |ui| inspector::show(ui, &mut self.history, &self.timeline.selection, self.player.playhead()));
+            if self.history.revision() != before {
+                self.sync_player();
+            }
+            widgets::vline(ui, insp_rect.left(), insp_rect.top(), insp_rect.bottom());
         }
         let rs = self.render_state.clone();
         let rev = self.history.revision();
-        self.viewer.show(ui, viewer_rect, &mut self.player, rs.as_ref(), rev);
+        let shown = self.viewer.show(ui, viewer_rect, &mut self.player, rs.as_ref(), rev);
         if !has_media {
             ui.painter().text(
                 viewer_rect.center(),
@@ -299,18 +1005,106 @@ impl KompoApp {
                 theme::TEXT_3,
             );
         }
+        // click an angle in the multicam grid to cut to it
+        if let Some((grid, n)) = shown.multicam_grid {
+            let resp = ui.interact(grid, ui.id().with("mc-grid"), egui::Sense::click());
+            if resp.clicked()
+                && let Some(p) = resp.interact_pointer_pos()
+            {
+                let cols = (n as f64).sqrt().ceil() as usize;
+                let rows = n.div_ceil(cols);
+                let col = (((p.x - grid.left()) / grid.width()) * cols as f32) as usize;
+                let row = (((p.y - grid.top()) / grid.height()) * rows as f32) as usize;
+                self.switch_angle(row * cols + col);
+            }
+        }
         let mut tui = ui.new_child(egui::UiBuilder::new().max_rect(transport_rect));
         viewer::transport(&mut tui, &mut self.player);
-        widgets::hairline(ui, timeline_rect.top(), timeline_rect.left(), timeline_rect.right());
-        self.timeline_strip(ui, timeline_rect);
-        ui.allocate_rect(full, Sense::hover());
+        widgets::hairline(ui, toolbar_rect.top(), toolbar_rect.left(), toolbar_rect.right());
+        let mut tb = ui.new_child(egui::UiBuilder::new().max_rect(toolbar_rect));
+        self.tool_bar(&mut tb);
+
+        // timeline
+        let rev_before = self.history.revision();
+        let resp = {
+            let cache = &self.player.audio_cache;
+            let waveforms = |m: MediaId, s: usize| cache.get(m, s);
+            let mut tl_ui = ui.new_child(egui::UiBuilder::new().max_rect(timeline_rect));
+            self.timeline.show(
+                &mut tl_ui,
+                timeline_rect,
+                TimelineEnv {
+                    history: &mut self.history,
+                    playhead: self.player.playhead(),
+                    playing: self.player.is_playing(),
+                    waveforms: &waveforms,
+                    offline: &self.offline,
+                },
+            )
+        };
+        if self.history.revision() != rev_before {
+            self.sync_player();
+        }
+        if let Some(t) = resp.seek {
+            self.player.seek(t);
+        }
+        if let Some(s) = resp.status {
+            self.notify(s);
+        }
+        if let Some((media, track, at, insert)) = resp.dropped {
+            let (v, a) = match track.kind {
+                TrackKind::Video => (track, TrackRef::audio(self.timeline.audio_target)),
+                TrackKind::Audio => (TrackRef::video(self.timeline.video_target), track),
+            };
+            self.place_media(&media, at, v, a, if insert { PlaceMode::Insert } else { PlaceMode::Overwrite });
+        }
+        ui.allocate_rect(full, egui::Sense::hover());
     }
 
     fn handle_drops(&mut self, ui: &Ui) {
         let dropped: Vec<PathBuf> =
             ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
         for p in dropped {
-            self.import(&p);
+            self.open_path(&p);
+        }
+    }
+
+    fn close_guard(&mut self, ui: &Ui) {
+        if ui.input(|i| i.viewport().close_requested()) && self.history.is_dirty() && !self.allow_close && self.launch.screenshot.is_none()
+        {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_dialog = true;
+        }
+        if !self.close_dialog {
+            return;
+        }
+        let modal = egui::Modal::new(egui::Id::new("close")).show(ui.ctx(), |ui| {
+            ui.set_width(340.0);
+            ui.label(RichText::new("Save changes before closing?").font(theme::title()).color(theme::TEXT));
+            ui.add_space(theme::SPACE_3);
+            ui.label(RichText::new("Your edits since the last save will be lost otherwise.").color(theme::TEXT_2));
+            ui.add_space(theme::SPACE_5);
+            ui.horizontal(|ui| {
+                if widgets::primary_button(ui, "Save").clicked() {
+                    self.save();
+                    if !self.history.is_dirty() {
+                        self.allow_close = true;
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    self.close_dialog = false;
+                }
+                if widgets::text_button(ui, "Don't Save", false).clicked() {
+                    self.allow_close = true;
+                    self.close_dialog = false;
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if widgets::text_button(ui, "Cancel", false).clicked() {
+                    self.close_dialog = false;
+                }
+            });
+        });
+        if modal.should_close() {
+            self.close_dialog = false;
         }
     }
 
@@ -338,37 +1132,31 @@ impl KompoApp {
         }
         ui.ctx().request_repaint();
     }
-}
 
-fn short_renderer(name: &str) -> String {
-    name.split(" (").next().unwrap_or(name).to_string()
-}
-
-fn fmt_dur(t: Time) -> String {
-    let s = t.seconds();
-    if s >= 3600.0 * 23.0 {
-        return "still".into();
-    }
-    format!("{}:{:02}", (s / 60.0) as u32, (s % 60.0) as u32)
-}
-
-impl eframe::App for KompoApp {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    /// One UI frame (shared by the window and the headless UI benchmark).
+    pub fn frame(&mut self, ui: &mut Ui) {
         self.shortcuts(ui);
         self.handle_drops(ui);
         self.player.tick();
-        if self.player.is_playing() {
+        if self.player.is_playing() || self.history.in_gesture() {
             ui.ctx().request_repaint();
         }
-        let title = format!("Kompo — {}", self.history.project().name);
-        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(title));
-
-        egui::Panel::top("top").exact_size(32.0).frame(egui::Frame::new().fill(theme::BG_PANEL)).show(ui, |ui| self.top_bar(ui));
+        egui::Panel::top("top").exact_size(32.0).frame(egui::Frame::new().fill(theme::BG_PANEL)).show(ui, |ui| self.menu_bar(ui));
         egui::Panel::bottom("pages")
             .exact_size(theme::PAGE_BAR_HEIGHT)
             .frame(egui::Frame::new().fill(theme::BG_PANEL))
             .show(ui, |ui| self.page_bar(ui));
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG_PANEL)).show(ui, |ui| self.page_content(ui));
+        self.close_guard(ui);
+        self.autosave();
+    }
+}
+
+impl eframe::App for KompoApp {
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        let title = format!("Kompo — {}{}", self.history.project().name, if self.history.is_dirty() { " •" } else { "" });
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(title));
+        self.frame(ui);
         self.screenshot(ui);
     }
 }

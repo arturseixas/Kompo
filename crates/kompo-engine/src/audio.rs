@@ -60,7 +60,20 @@ pub struct AudioCache {
     cancel: Arc<AtomicBool>,
     /// Bumped whenever a conform finishes (the mix program must be rebuilt).
     pub generation: Arc<AtomicU64>,
+    jobs: crossbeam_channel::Sender<Job>,
+    job_rx: crossbeam_channel::Receiver<Job>,
+    workers: Mutex<usize>,
 }
+
+struct Job {
+    key: (MediaId, usize),
+    path: PathBuf,
+    progress: Arc<AtomicU64>,
+}
+
+/// Concurrent conform jobs (decoding is CPU heavy; opening a project with
+/// many media must not start one thread per file).
+const CONFORM_WORKERS: usize = 2;
 
 impl AudioCache {
     pub fn new(sample_rate: u32, channels: u16) -> Self {
@@ -68,6 +81,7 @@ impl AudioCache {
     }
 
     pub fn with_dir(dir: PathBuf, sample_rate: u32, channels: u16) -> Self {
+        let (jobs, job_rx) = crossbeam_channel::unbounded();
         Self {
             dir,
             sample_rate,
@@ -75,6 +89,54 @@ impl AudioCache {
             entries: Arc::new(Mutex::new(HashMap::new())),
             cancel: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
+            jobs,
+            job_rx,
+            workers: Mutex::new(0),
+        }
+    }
+
+    fn spawn_workers(&self) {
+        let mut n = self.workers.lock();
+        while *n < CONFORM_WORKERS {
+            *n += 1;
+            let rx = self.job_rx.clone();
+            let entries = self.entries.clone();
+            let cancel = self.cancel.clone();
+            let generation = self.generation.clone();
+            let dir = self.dir.clone();
+            let (rate, ch) = (self.sample_rate, self.channels);
+            std::thread::Builder::new()
+                .name("kompo-conform".into())
+                .spawn(move || {
+                    while let Ok(job) = rx.recv() {
+                        if cancel.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        let (media, stream) = job.key;
+                        let _ = media;
+                        let progress = job.progress.clone();
+                        let r = conform_cached(
+                            &dir,
+                            &job.path,
+                            stream,
+                            rate,
+                            ch,
+                            || open_pcm(&job.path, stream),
+                            |f| progress.store(f, Ordering::Relaxed),
+                            &cancel,
+                        );
+                        let state = match r {
+                            Ok(c) => ConformState::Ready(Arc::new(c)),
+                            Err(e) => {
+                                log::warn!("audio conform failed for {}: {e}", job.path.display());
+                                ConformState::Failed(e.to_string())
+                            }
+                        };
+                        entries.lock().insert(job.key, state);
+                        generation.fetch_add(1, Ordering::Release);
+                    }
+                })
+                .expect("spawn conform worker");
         }
     }
 
@@ -89,50 +151,24 @@ impl AudioCache {
         }
     }
 
-    /// Starts conforming if not already done or running.
+    /// Queues conforming if not already done or running. Already cached
+    /// conforms are opened immediately (cheap), so reopening a project does not
+    /// wait behind the queue.
     pub fn ensure(&self, media: MediaId, path: &Path, stream: usize) {
         let key = (media, stream);
-        {
-            let mut e = self.entries.lock();
-            if e.contains_key(&key) {
-                return;
-            }
-            e.insert(key, ConformState::Pending { progress: Arc::new(AtomicU64::new(0)) });
+        if self.entries.lock().contains_key(&key) {
+            return;
         }
-        let entries = self.entries.clone();
-        let cancel = self.cancel.clone();
-        let generation = self.generation.clone();
-        let dir = self.dir.clone();
-        let (rate, ch) = (self.sample_rate, self.channels);
-        let path = path.to_path_buf();
-        let progress = match self.entries.lock().get(&key) {
-            Some(ConformState::Pending { progress }) => progress.clone(),
-            _ => Arc::new(AtomicU64::new(0)),
-        };
-        std::thread::Builder::new()
-            .name("kompo-conform".into())
-            .spawn(move || {
-                let r = conform_cached(
-                    &dir,
-                    &path,
-                    stream,
-                    rate,
-                    ch,
-                    || open_pcm(&path, stream),
-                    |f| progress.store(f, Ordering::Relaxed),
-                    &cancel,
-                );
-                let state = match r {
-                    Ok(c) => ConformState::Ready(Arc::new(c)),
-                    Err(e) => {
-                        log::warn!("audio conform failed for {}: {e}", path.display());
-                        ConformState::Failed(e.to_string())
-                    }
-                };
-                entries.lock().insert(key, state);
-                generation.fetch_add(1, Ordering::Release);
-            })
-            .expect("spawn conform");
+        let cached = kompo_audio::conform::cache_path(&self.dir, path, stream, self.sample_rate, self.channels);
+        if let Ok(c) = ConformedAudio::open(&cached) {
+            self.entries.lock().insert(key, ConformState::Ready(Arc::new(c)));
+            self.generation.fetch_add(1, Ordering::Release);
+            return;
+        }
+        let progress = Arc::new(AtomicU64::new(0));
+        self.entries.lock().insert(key, ConformState::Pending { progress: progress.clone() });
+        self.spawn_workers();
+        let _ = self.jobs.send(Job { key, path: path.to_path_buf(), progress });
     }
 
     /// Conforms synchronously (export, tests).

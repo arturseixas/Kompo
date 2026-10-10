@@ -93,6 +93,8 @@ pub fn test_media(cfg: &BenchConfig, codec: &str) -> Option<PathBuf> {
         audio: true,
         gop: 30,
         detail: true,
+        start_frame: 0,
+        random_audio: false,
     };
     match testmedia::generate(&path, &spec) {
         Ok(()) => Some(path),
@@ -373,4 +375,82 @@ pub fn markdown(env: &Environment, results: &[BenchResult]) -> String {
 /// Compose options for a project at full resolution.
 pub fn full_res(project: &Project) -> ComposeOptions {
     ComposeOptions::full(project.active(), project.settings.working_space)
+}
+
+/// Builds a project with `clips` clips spread over 4 video and 4 audio tracks,
+/// referencing 50 media assets.
+pub fn big_project(media_path: &Path, clips: usize) -> Project {
+    let asset = import::probe_asset(media_path).expect("probe");
+    let mut project = Project::new("big");
+    let mut ids = Vec::new();
+    for i in 0..50 {
+        let mut a = asset.clone();
+        a.id = kompo_core::id::MediaId::new();
+        a.name = format!("shot_{i:03}.mp4");
+        ids.push(project.add_media(a));
+    }
+    let seq = project.active_mut();
+    for i in seq.video_tracks.len()..4 {
+        seq.video_tracks.push_back(kompo_core::timeline::Track::new(TrackKind::Video, format!("V{}", i + 1)));
+    }
+    for i in seq.audio_tracks.len()..4 {
+        seq.audio_tracks.push_back(kompo_core::timeline::Track::new(TrackKind::Audio, format!("A{}", i + 1)));
+    }
+    let rate = seq.format.frame_rate;
+    let clip_len = Time::from_frames(12, rate);
+    let per_track = clips / 8 + 1;
+    let mut n = 0;
+    'outer: for k in 0..per_track {
+        for tr in 0..4 {
+            for kind in [TrackKind::Video, TrackKind::Audio] {
+                if n >= clips {
+                    break 'outer;
+                }
+                let media = ids[n % ids.len()];
+                let mut c = kompo_core::timeline::Clip::new(
+                    format!("clip {n}"),
+                    kompo_core::timeline::ClipSource::Media { media, stream: 0 },
+                    clip_len * k as i64 + Time::from_frames(tr as i64, rate),
+                    clip_len,
+                    Time::from_frames((n % 20) as i64, rate),
+                );
+                c.video.opacity = kompo_core::AnimatedParam::float(0.9);
+                let r = kompo_core::timeline::TrackRef { kind, index: tr };
+                seq.track_mut(r).unwrap().overwrite(c);
+                n += 1;
+            }
+        }
+    }
+    project
+}
+
+/// M3: open a project with `clips` clips and show its first frame.
+pub fn project_open(media_path: &Path, clips: usize, dir: &Path, player: &mut Player) -> BenchResult {
+    let project = big_project(media_path, clips);
+    let count = project.active().clip_count();
+    let path = dir.join(format!("bench-{clips}.kompo"));
+    project.save(&path).expect("save");
+    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let start = Instant::now();
+    let opened = crate::project_io::open(&path).expect("open");
+    let load_ms = start.elapsed().as_secs_f64() * 1000.0;
+    player.set_project(&opened.project, 99);
+    player.seek(Time::ZERO);
+    let (w, h) = (opened.project.active().format.width / 2, opened.project.active().format.height / 2);
+    let node = player.compose_exact(Time::ZERO, w, h, Duration::from_secs(10));
+    let _ = player.renderer.render_display(&node, &OutputSpec::display(opened.project.settings.working_space));
+    let total = start.elapsed().as_secs_f64();
+    BenchResult {
+        name: format!("project_open_{clips}"),
+        value: total * 1000.0,
+        unit: "ms".into(),
+        target: "< 2000 ms (load + first frame)".into(),
+        pass: total < 2.0,
+        hardware_dependent: false,
+        notes: format!(
+            "{count} clips, {} media, file {:.1} KiB; parse+check {load_ms:.0} ms",
+            opened.project.media.len(),
+            size as f64 / 1024.0
+        ),
+    }
 }

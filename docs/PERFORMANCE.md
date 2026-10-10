@@ -19,9 +19,9 @@ cargo run --release -p kompo-engine --bin kompo-bench -- --only scrub,memory
 | M1 | Reprodução em tempo real de 4K H.264 e HEVC com 3 camadas e 2 efeitos, em GPU integrada atual | `playback_4k_h264_3layers_2fx`, `playback_4k_hevc_3layers_2fx` | ≥ 99% dos quadros exibidos no tempo certo, na taxa da fonte (30 fps), tocando contra o relógio de áudio | sim (iGPU + decode por hardware) |
 | M1a | Decodificação 4K sustentável | `decode_4k_h264`, `decode_4k_hevc` | ≥ 30 fps por stream | sim |
 | M2 | Scrubbing na timeline sem travar | `scrub_4k_h264` | custo da thread de UI < 16,7 ms por quadro (60 fps) em qualquer salto; o quadro exato chega depois, sem bloquear | não |
-| M3 | Abrir projeto com 500 clipes em menos de 2 s | `project_open_500` (Fase 1) | carregar + migrar + desserializar + montar o primeiro quadro < 2 s | não |
+| M3 | Abrir projeto com 500 clipes em menos de 2 s | `project_open_500` | carregar + migrar + desserializar + montar o primeiro quadro < 2 s | não |
 | M4 | Memória estável em sessões de várias horas | `memory_soak` | crescimento de RSS < 5% entre o 2º e o 4º quartil de uma sessão de render contínuo com saltos (o modo completo roda 120 s; CI 20 s) | não |
-| M5 | UI a 60 fps com timeline pesada | `ui_timeline_heavy` (Fase 1) | tempo de CPU para montar e tessellar um quadro da UI com 5 000 clipes < 8 ms | não |
+| M5 | UI a 60 fps com timeline pesada | `ui_timeline_heavy` (binário `kompo-ui-bench`) | tempo de CPU para montar e tessellar um quadro da UI com 5 000 clipes < 8 ms | não |
 
 As metas "dependem de hardware" quando o runner do CI não tem o hardware da
 meta (os runners do GitHub não têm GPU nem decodificador de vídeo; a GPU vista
@@ -86,6 +86,19 @@ Mitigações já disponíveis para máquinas fracas: resolução de reprodução
 no viewer, o backend CPU (`KOMPO_CPU_RENDER=1`) e — Fase 8 — proxies.
 A validação de M1 em hardware real exige rodar `kompo-bench` numa máquina com
 GPU integrada (procedimento em "Como medir em hardware real").
+
+### Fase 1 — timeline
+
+Mesmo ambiente (4 vCPUs, sem GPU).
+
+| Cenário | Resultado | Meta | Status |
+|---|---|---|---|
+| project_open_500 | **848 ms** (parse + checagem de mídia: 25 ms; o resto é decodificar e renderizar o primeiro quadro de 4 camadas 4K no llvmpipe) | < 2 000 ms | ok |
+| ui_timeline_heavy | **2,38 ms p95** de CPU por quadro da UI completa com 5 000 clipes, rolando, dando zoom e passando o mouse (p50 0,71 ms, máx. 3,29 ms) | < 8 ms | ok |
+
+O arquivo de 500 clipes tem 502 KiB de JSON. A timeline só desenha os clipes
+visíveis (busca binária por trilha) e as formas de onda viram uma malha por
+clipe, por isso o custo independe do tamanho total do projeto.
 
 ### Como medir em hardware real
 

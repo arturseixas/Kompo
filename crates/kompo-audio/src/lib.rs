@@ -11,6 +11,7 @@ pub mod engine;
 pub mod meter;
 pub mod mix;
 pub mod resample;
+pub mod sync;
 
 pub use conform::{ConformedAudio, PcmSource, SymphoniaSource};
 pub use engine::{AudioEngine, DeviceInfo};

@@ -51,10 +51,18 @@ crates/
 
 | Ação | Atalho |
 |---|---|
-| Play/pause | Espaço |
-| Shuttle reverso / parar / avançar | J / K / L |
-| Quadro anterior / seguinte | ← / → |
-| Início / fim | Home / End |
-| Importar | Ctrl+I |
+| Play/pause · shuttle | Espaço · J / K / L |
+| Quadro anterior / seguinte · edição anterior / seguinte | ← / → · ↑ / ↓ |
+| Ferramentas: seleção, seleção de trilha, ripple, roll, lâmina, slip, slide | V, A, B, N, C, Y, U |
+| Magnetismo | S |
+| In / Out / marcar clipe / limpar | I / O / X / Ctrl+Shift+X |
+| Marcador | M |
+| Add Edit (destino) / em todas as trilhas | Ctrl+K / Ctrl+Shift+K |
+| Apagar / Ripple Delete | Delete / Shift+Delete |
+| Lift / Extract (In–Out) | ; / ' |
+| Inserir / sobrescrever do media pool | , / . |
+| Ângulo multicam · visão multicam | 1–9 · Shift+0 |
+| Zoom da timeline | = / - / \ |
 | Desfazer / refazer | Ctrl+Z / Ctrl+Shift+Z |
+| Novo, abrir, salvar, salvar como, importar | Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+I |
 | Páginas Cut, Color, Audio, Effects, Motion | Shift+1 … Shift+5 |

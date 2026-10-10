@@ -79,6 +79,9 @@ tempfile = "3"
 # DSP, codec and GPU helpers naturally take many scalar parameters.
 too_many_arguments = "allow"
 type_complexity = "allow"
+# Index loops over several parallel arrays read better than zipped iterators.
+needless_range_loop = "allow"
+new_without_default = "allow"
 
 [profile.dev]
 opt-level = 1

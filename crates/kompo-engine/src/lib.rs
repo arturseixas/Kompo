@@ -12,6 +12,7 @@ pub mod compose;
 pub mod frames;
 pub mod import;
 pub mod player;
+pub mod project_io;
 
 pub use player::{Player, PlayerStats};
 
@@ -36,6 +37,10 @@ pub fn bench_effects() -> Vec<&'static str> {
 }
 
 /// Benchmarks contributed by later phases (project open, UI timeline, ...).
-pub fn extra_benchmarks(_cfg: &bench::BenchConfig, _player: &mut Player, _quick: bool) -> Vec<bench::BenchResult> {
-    Vec::new()
+pub fn extra_benchmarks(cfg: &bench::BenchConfig, player: &mut Player, _quick: bool) -> Vec<bench::BenchResult> {
+    let mut out = Vec::new();
+    if let Some(media) = bench::test_media(cfg, "h264") {
+        out.push(bench::project_open(&media, 500, &cfg.media_dir, player));
+    }
+    out
 }

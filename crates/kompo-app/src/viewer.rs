@@ -31,11 +31,30 @@ pub struct Viewer {
     /// Playback resolution divider (1 = full, 2 = half, 4 = quarter); 0 = auto.
     pub resolution: u32,
     pub render_ms: f64,
+    /// Show all angles of the multicam clip under the playhead.
+    pub multicam: bool,
+    last_multicam: bool,
+}
+
+/// What the viewer drew this frame.
+#[derive(Default)]
+pub struct Shown {
+    /// The image rect and the angle count when the multicam grid is shown.
+    pub multicam_grid: Option<(Rect, usize)>,
 }
 
 impl Viewer {
     pub fn new() -> Self {
-        Self { target: None, texture_id: None, cpu_texture: None, last: None, resolution: 0, render_ms: 0.0 }
+        Self {
+            target: None,
+            texture_id: None,
+            cpu_texture: None,
+            last: None,
+            resolution: 0,
+            render_ms: 0.0,
+            multicam: false,
+            last_multicam: false,
+        }
     }
 
     fn ensure_target(&mut self, rs: &egui_wgpu::RenderState, w: u32, h: u32) {
@@ -84,7 +103,14 @@ impl Viewer {
     }
 
     /// Draws the viewer image into `rect`.
-    pub fn show(&mut self, ui: &mut Ui, rect: Rect, player: &mut Player, rs: Option<&egui_wgpu::RenderState>, revision: u64) {
+    pub fn show(&mut self, ui: &mut Ui, rect: Rect, player: &mut Player, rs: Option<&egui_wgpu::RenderState>, revision: u64) -> Shown {
+        let mut out = Shown::default();
+        let mc = if self.multicam { player.multicam_at_playhead() } else { None };
+        let mc_angles = mc.and_then(|(_, id, _)| player.project().multicams.get(&id).map(|m| m.angles.len()));
+        if mc_angles.is_some() != self.last_multicam {
+            self.last = None;
+            self.last_multicam = mc_angles.is_some();
+        }
         ui.painter().rect_filled(rect, 0.0, theme::BG_BASE);
         let fmt = player.sequence().format.clone();
         let (w, h, shown) = self.frame_size(rect, ui.ctx().pixels_per_point(), fmt.width, fmt.height);
@@ -93,7 +119,10 @@ impl Viewer {
         let spec = OutputSpec::display(player.project().settings.working_space);
         if need {
             let start = std::time::Instant::now();
-            let node = player.compose(w, h);
+            let node = match mc_angles {
+                Some(_) => player.compose_multicam(w, h).unwrap_or_else(|| player.compose(w, h)),
+                None => player.compose(w, h),
+            };
             match (&mut player.renderer, rs) {
                 (Renderer::Gpu(g), Some(rs)) => {
                     self.ensure_target(rs, w, h);
@@ -124,6 +153,27 @@ impl Viewer {
         if let Some(id) = id {
             ui.painter().image(id, shown, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
         }
+        if let (Some(n), Some((_, _, active))) = (mc_angles, mc) {
+            // outline the active angle and number the cells
+            let cols = (n as f64).sqrt().ceil() as usize;
+            let rows = n.div_ceil(cols);
+            let (cw, ch) = (shown.width() / cols as f32, shown.height() / rows as f32);
+            for i in 0..n {
+                let cell = Rect::from_min_size(shown.min + egui::vec2((i % cols) as f32 * cw, (i / cols) as f32 * ch), egui::vec2(cw, ch));
+                ui.painter().text(
+                    cell.left_top() + egui::vec2(8.0, 8.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("{}", i + 1),
+                    theme::strong(),
+                    theme::TEXT,
+                );
+                if i == active {
+                    ui.painter().rect_stroke(cell.shrink(1.0), 0.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+                }
+            }
+            out.multicam_grid = Some((shown, n));
+        }
+        out
     }
 }
 

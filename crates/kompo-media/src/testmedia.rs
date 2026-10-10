@@ -31,6 +31,11 @@ pub struct TestClipSpec {
     /// Adds moving fine-grained texture so the clip compresses like real
     /// footage (benchmarks); the frame-number code stays readable.
     pub detail: bool,
+    /// The clip starts at this frame of the (infinite) test pattern; two clips
+    /// with different starts behave like two cameras started at different times.
+    pub start_frame: u32,
+    /// Aperiodic tone bursts instead of the once-per-second beep (audio sync tests).
+    pub random_audio: bool,
 }
 
 impl TestClipSpec {
@@ -47,6 +52,8 @@ impl TestClipSpec {
             audio: true,
             gop: 25,
             detail: false,
+            start_frame: 0,
+            random_audio: false,
         }
     }
 }
@@ -149,6 +156,21 @@ pub fn audio_sample(i: u64, sample_rate: u32, fps: Rational) -> f32 {
     if fps_i > 0 && frame % fps_i < 2 { (0.5 * (2.0 * std::f64::consts::PI * 1000.0 * t).sin()) as f32 } else { 0.0 }
 }
 
+/// Aperiodic burst pattern keyed by absolute sample index (50 ms blocks).
+pub fn random_audio_sample(i: u64, sample_rate: u32) -> f32 {
+    let block = i / (sample_rate as u64 / 20);
+    let mut h = block.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= h >> 31;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 29;
+    if h.is_multiple_of(5) {
+        let t = i as f64 / sample_rate as f64;
+        (0.4 * (2.0 * std::f64::consts::PI * 700.0 * t).sin()) as f32
+    } else {
+        0.0
+    }
+}
+
 /// Generates a test clip atomically (written to a temporary file, then renamed),
 /// so concurrent tests never observe a partially written file.
 pub fn generate(path: &Path, spec: &TestClipSpec) -> Result<(), MediaError> {
@@ -179,8 +201,9 @@ fn generate_to(path: &Path, spec: &TestClipSpec) -> Result<(), MediaError> {
     let mut writer = MediaWriter::create(path, None, Some(video), audio)?;
     let fps = spec.frame_rate.as_f64().round() as u32;
     let samples_per_frame = 48_000.0 / spec.frame_rate.as_f64();
-    let mut sample_index = 0u64;
-    for n in 0..spec.frames {
+    let start_sample = (spec.start_frame as f64 * samples_per_frame).round() as u64;
+    let mut sample_index = start_sample;
+    for n in spec.start_frame..spec.start_frame + spec.frames {
         let mut f = ff::frame::Video::new(ff::format::Pixel::YUV420P, spec.width, spec.height);
         let (ys, us, vs) = (f.stride(0), f.stride(1), f.stride(2));
         let mut y = vec![0u8; ys * spec.height as usize];
@@ -213,7 +236,11 @@ fn generate_to(path: &Path, spec: &TestClipSpec) -> Result<(), MediaError> {
             let end = ((n + 1) as f64 * samples_per_frame).round() as u64;
             let mut buf = Vec::with_capacity(((end - sample_index) * 2) as usize);
             while sample_index < end {
-                let s = audio_sample(sample_index, 48_000, spec.frame_rate);
+                let s = if spec.random_audio {
+                    random_audio_sample(sample_index, 48_000)
+                } else {
+                    audio_sample(sample_index, 48_000, spec.frame_rate)
+                };
                 buf.push(s);
                 buf.push(s);
                 sample_index += 1;

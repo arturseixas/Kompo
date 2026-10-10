@@ -46,12 +46,7 @@ impl AudioReader {
     pub fn seek(&mut self, t: Time) -> Result<(), MediaError> {
         let ts = t.max(Time::ZERO).to_timebase(self.time_base) + self.origin;
         unsafe {
-            ffmpeg_sys_next::av_seek_frame(
-                self.input.as_mut_ptr(),
-                self.stream_index as i32,
-                ts,
-                ffmpeg_sys_next::AVSEEK_FLAG_BACKWARD,
-            )
+            ffmpeg_sys_next::av_seek_frame(self.input.as_mut_ptr(), self.stream_index as i32, ts, ffmpeg_sys_next::AVSEEK_FLAG_BACKWARD)
         };
         self.decoder.flush();
         self.eof_sent = false;

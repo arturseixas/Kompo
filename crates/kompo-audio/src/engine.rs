@@ -354,24 +354,22 @@ fn spawn_null_device(
         .name("kompo-audio-null".into())
         .spawn(move || {
             let rate = shared.device_rate as f64;
-            let period = Duration::from_millis(10);
-            let mut buf = vec![0f32; ((rate * 0.01).ceil() as usize + 1) * channels];
+            let mut buf: Vec<f32> = Vec::new();
             let mut epoch = 0u64;
-            let mut next = Instant::now();
-            let mut frac = 0.0f64;
+            // Consume by elapsed wall time, not by assumed sleep length: OS timers
+            // (macOS in particular) may oversleep by tens of milliseconds.
+            let start = Instant::now();
+            let mut consumed: u64 = 0;
             while !stop.load(Ordering::Relaxed) {
-                next += period;
-                frac += rate * 0.01;
-                let frames = frac.floor() as usize;
-                frac -= frames as f64;
-                let data = &mut buf[..frames * channels];
-                callback_body(&shared, &mut cons, &mut epoch, data, channels);
-                let now = Instant::now();
-                if next > now {
-                    std::thread::sleep(next - now);
-                } else {
-                    next = now;
+                std::thread::sleep(Duration::from_millis(5));
+                let target = (start.elapsed().as_secs_f64() * rate) as u64;
+                let frames = (target - consumed).min((rate * 0.25) as u64) as usize;
+                consumed = target;
+                if frames == 0 {
+                    continue;
                 }
+                buf.resize(frames * channels, 0.0);
+                callback_body(&shared, &mut cons, &mut epoch, &mut buf, channels);
             }
         })
         .expect("spawn null audio device")

@@ -369,6 +369,71 @@ impl Player {
         compose(&self.project, &seq, t, &opts, &mut frames)
     }
 
+    /// The multicam clip under the playhead on the topmost enabled video track.
+    pub fn multicam_at_playhead(&self) -> Option<(ClipId, kompo_core::id::MulticamId, usize)> {
+        let t = self.playhead;
+        self.sequence().video_tracks.iter().rev().filter(|tr| tr.enabled).filter_map(|tr| tr.clip_at(t)).find_map(|c| match c.source {
+            kompo_core::timeline::ClipSource::Multicam { multicam, angle } => Some((c.id, multicam, angle)),
+            _ => None,
+        })
+    }
+
+    /// Grid of every angle of the multicam under the playhead (multicam view).
+    pub fn compose_multicam(&mut self, width: u32, height: u32) -> Option<NodeRef> {
+        use kompo_gpu::graph::{self, CompositeNode, Layer, Node};
+        let (clip_id, mc_id, _) = self.multicam_at_playhead()?;
+        let mc = self.project.multicams.get(&mc_id)?.clone();
+        let clip = self.sequence().clip(clip_id)?.clone();
+        let n = mc.angles.len().max(1);
+        let cols = (n as f64).sqrt().ceil() as usize;
+        let rows = n.div_ceil(cols);
+        let (cw, ch) = (width as f32 / cols as f32, height as f32 / rows as f32);
+        let mc_time = clip.source_time(self.playhead);
+        let working = self.project.settings.working_space;
+        let mut layers = Vec::new();
+        let (mut late, mut missing) = (0u32, 0u32);
+        for (i, angle) in mc.angles.iter().enumerate() {
+            let Some(media) = self.project.media(angle.media).cloned() else { continue };
+            let Some(v) = media.info.video.clone() else { continue };
+            let mut alias = clip.clone();
+            alias.id = ClipId::from_u128(clip_id.as_u128() ^ ((i as u128 + 1) << 64));
+            alias.source = kompo_core::timeline::ClipSource::Media { media: angle.media, stream: 0 };
+            let mut frames = Frames {
+                servers: &mut self.servers,
+                stills: &mut self.stills,
+                playing: self.playing,
+                opts: &self.decoder_options,
+                blocking: None,
+                late: 0,
+                missing: 0,
+            };
+            let frame = frames.frame(&alias, &media, mc_time + angle.offset);
+            late += frames.late;
+            missing += frames.missing;
+            let Some(frame) = frame else { continue };
+            let bits = if frame.sample == kompo_media::SampleType::U8 { 8 } else { frame.bits as u32 };
+            let input = kompo_color::InputTransform::new(media.color(), bits, frame.layout.is_rgb(), working);
+            let (fw, fh) = (frame.width as f32, frame.height as f32);
+            let s = (cw / fw).min(ch / fh);
+            let node = Node::frame_scaled(frame, input, (fw * s).ceil().max(1.0) as u32, (fh * s).ceil().max(1.0) as u32);
+            let (nw, nh) = node.size();
+            let (col, row) = (i % cols, i / cols);
+            let fit = graph::fit_transform(
+                nw as f32,
+                nh as f32,
+                v.pixel_aspect.as_f64() as f32,
+                cw - 4.0,
+                ch - 4.0,
+                kompo_core::timeline::ScaleMode::Fit,
+            );
+            let transform = graph::affine_mul(&graph::translate(col as f32 * cw + 2.0, row as f32 * ch + 2.0), &fit);
+            layers.push(Layer { input: node, transform, opacity: 1.0, blend: kompo_core::effects::BlendMode::Normal, crop: [0.0; 4] });
+        }
+        self.stats.last_late = late;
+        self.stats.last_missing = missing;
+        Some(Arc::new(Node::Composite(CompositeNode { width, height, background: [0.02, 0.02, 0.02, 1.0], layers })))
+    }
+
     pub fn decoder_stats(&self) -> Vec<ServerStats> {
         self.servers.values().map(|s| s.stats()).collect()
     }

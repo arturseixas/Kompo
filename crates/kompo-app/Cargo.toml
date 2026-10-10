@@ -6,12 +6,18 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+name = "kompo_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "kompo"
 path = "src/main.rs"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
 
 [dependencies]
 kompo-core.workspace = true

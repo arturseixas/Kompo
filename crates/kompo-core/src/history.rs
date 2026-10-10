@@ -66,9 +66,10 @@ impl History {
         if self.gesture.is_none() {
             self.undo.push(Entry { label: label.to_string(), project: prev });
         } else if let Some(g) = &mut self.gesture
-            && g.label.is_empty() {
-                g.label = label.to_string();
-            }
+            && g.label.is_empty()
+        {
+            g.label = label.to_string();
+        }
         self.redo.clear();
         self.revision += 1;
         Ok(())
@@ -101,6 +102,38 @@ impl History {
 
     pub fn in_gesture(&self) -> bool {
         self.gesture.is_some()
+    }
+
+    /// During a gesture, re-applies an edit from the state the gesture started
+    /// in (so dragging back and forth never accumulates clamping errors).
+    /// Outside a gesture this behaves like [`apply`](Self::apply).
+    pub fn apply_from_gesture_base<E>(&mut self, label: &str, edit: impl FnOnce(&mut Project) -> Result<(), E>) -> Result<(), E> {
+        let Some(g) = &self.gesture else { return self.apply(label, edit) };
+        let mut next = g.project.clone();
+        edit(&mut next)?;
+        if next != self.current {
+            self.current = next;
+            self.redo.clear();
+            self.revision += 1;
+        }
+        Ok(())
+    }
+
+    /// Applies a view preference stored in the project (e.g. track heights)
+    /// without creating an undo step.
+    pub fn view_change(&mut self, f: impl FnOnce(&mut Project)) {
+        f(&mut self.current);
+        self.revision += 1;
+    }
+
+    /// Cancels the gesture, restoring the state it started from.
+    pub fn cancel_gesture(&mut self) {
+        if let Some(g) = self.gesture.take()
+            && g.project != self.current
+        {
+            self.current = g.project;
+            self.revision += 1;
+        }
     }
 
     pub fn can_undo(&self) -> bool {
@@ -143,5 +176,48 @@ impl History {
 
     pub fn redo_depth(&self) -> usize {
         self.redo.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::Project;
+
+    #[test]
+    fn gesture_is_one_step_and_reapplies_from_base() {
+        let mut h = History::new(Project::new("a"));
+        h.begin_gesture("rename");
+        for i in 0..10 {
+            h.apply_from_gesture_base::<()>("rename", |p| {
+                p.name = format!("{}{}", p.name, i);
+                Ok(())
+            })
+            .unwrap();
+        }
+        // only the last application counts (base + "9")
+        assert_eq!(h.project().name, "a9");
+        h.end_gesture();
+        assert_eq!(h.undo_depth(), 1);
+        h.undo();
+        assert_eq!(h.project().name, "a");
+    }
+
+    #[test]
+    fn cancel_restores() {
+        let mut h = History::new(Project::new("a"));
+        h.begin_gesture("x");
+        h.edit("x", |p| p.name = "b".into());
+        h.cancel_gesture();
+        assert_eq!(h.project().name, "a");
+        assert!(!h.can_undo());
+    }
+
+    #[test]
+    fn noop_edits_are_not_recorded() {
+        let mut h = History::new(Project::new("a"));
+        h.edit("nothing", |_| {});
+        assert!(!h.can_undo());
+        assert!(!h.is_dirty());
     }
 }

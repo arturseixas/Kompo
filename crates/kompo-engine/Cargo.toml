@@ -26,6 +26,7 @@ rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 env_logger.workspace = true
+dirs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -253,3 +253,61 @@ dinamicamente, dependências Rust MIT/Apache/BSD/MPL-2.0, fontes OFL) mantém
 abertas tanto licenças permissivas quanto proprietárias. `symphonia` é
 MPL-2.0 (copyleft por arquivo: modificações nos arquivos do symphonia
 precisariam ser publicadas; usar a biblioteca não impõe nada ao Kompo).
+
+---
+
+## D13. Semântica das operações de edição
+
+- Toda operação (`kompo-core/src/edit.rs`) é uma função pura sobre a
+  sequência + limites de mídia (`MediaLimits`), embrulhada pelo `History` como
+  um passo de undo. Arrastos contínuos (trim, roll, slip, slide, mover
+  marcador) reaplicam a operação a partir do estado do início do gesto a cada
+  quadro (`History::apply_from_gesture_base`): não há acúmulo de erro de
+  limite ao arrastar para frente e para trás, e o gesto inteiro vira um único
+  passo de undo.
+- **Clipes vinculados** (vídeo + áudio da mesma mídia) são selecionados,
+  movidos, aparados e cortados juntos; Alt seleciona só um lado. Ao cortar
+  um par vinculado, as metades da direita ganham um novo vínculo entre si.
+- **Sync lock.** Inserções e ripples empurram também as trilhas com sync lock
+  ligado (padrão), mas uma trilha que tem material dentro do intervalo afetado
+  **não** é deslocada — o ripple nunca apaga conteúdo silenciosamente (mesma
+  proteção do Premiere). Trilhas travadas nunca mudam; a edição inteira falha
+  com `Locked` se precisaria mudá-las.
+- **Arrastar clipe** = sobrescrever (Premiere); com Ctrl/Cmd = inserir.
+  Arrastar acima da trilha mais alta cria trilha nova.
+- **Lift/Extract** (`;`/`'`) atuam em todas as trilhas destravadas entre In e
+  Out. O modelo de destino de trilha é um V e um A (cabeçalho em âmbar), usado
+  por inserir/sobrescrever do media pool e por Add Edit (Ctrl+K).
+- Invariantes verificadas em teste a cada passo de um fuzz de 3 000 operações
+  aleatórias, que também confere que undo/redo restauram cada estado
+  exatamente.
+
+## D14. EDL e FCPXML
+
+- **EDL CMX3600**: exporta V1 e até quatro trilhas de áudio, cortes e
+  dissolves, comentários `FROM CLIP NAME` e `SOURCE FILE` (usados pelo
+  Premiere/Resolve para relink). Timecode de origem soma o timecode inicial da
+  mídia; o de gravação, o timecode inicial da sequência (padrão
+  01:00:00:00 preservado na importação). Limitação inerente do formato: uma
+  trilha de vídeo; efeitos e transformações não são representados.
+- **FCPXML 1.10** (lê 1.6+): V1 vira o *primary storyline* (`spine` com
+  `gap`s); V2+ viram clipes conectados com `lane` 1, 2…; áudio solto vira
+  clipe conectado com `lane` negativa. Um par vídeo+áudio vinculado da mesma
+  mídia é escrito como um único `asset-clip`, como o Final Cut faz. Mudança de
+  velocidade usa `timeMap`. Tempo racional exato (`1001/30000s`).
+- A importação é em duas etapas (o core não abre mídia): o documento é
+  analisado, o engine encontra/sonda as mídias (caminho do arquivo, depois
+  nome no media pool, depois nome ao lado do arquivo) e só então a sequência
+  é montada; o que não for encontrado volta numa lista de *offline*.
+
+## D15. Multicam
+
+Um `MulticamSource` guarda, por ângulo, a mídia e o deslocamento da sua
+origem em relação ao tempo zero do multicam. O alinhamento pode ser por
+pontos de entrada, por timecode de origem ou **por áudio**: cada ângulo é
+reduzido a um envelope de ataques a 1 kHz e o atraso é a posição do máximo da
+correlação cruzada (FFT, `realfft`) — resolução de 1 ms, bem abaixo de um
+quadro. O clipe multicam na timeline guarda o ângulo ativo; cortar para outro
+ângulo (teclas 1–9 ou clique na grade do viewer) divide o clipe no playhead e
+muda o ângulo da parte da direita. O áudio segue um ângulo fixo
+(`audio_angle`), como em Premiere/Resolve.
