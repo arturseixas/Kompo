@@ -5,7 +5,7 @@ use crate::theme;
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use kompo_engine::kompo_core::animation::{AnimatedParam, Handle, Interp, ParamValue};
 use kompo_engine::kompo_core::history::History;
-use kompo_engine::kompo_core::id::{ClipId, EffectId, NodeId};
+use kompo_engine::kompo_core::id::{ClipId, EffectId, NodeId, TrackId};
 use kompo_engine::kompo_core::project::Project;
 use kompo_engine::kompo_core::time::Time;
 use kompo_engine::kompo_fx::FxUi;
@@ -19,6 +19,16 @@ pub enum ParamPath {
         name: String,
     },
     Opacity(ClipId),
+    /// Volume (0) or pan (1) of an audio track (`Some`) or the master (`None`); times are absolute.
+    Mixer {
+        track: Option<TrackId>,
+        prop: u8,
+    },
+    TrackEffect {
+        track: TrackId,
+        fx: EffectId,
+        name: String,
+    },
     /// `prop`: 0 center, 1 size, 2 rotation of a power window.
     Window {
         clip: ClipId,
@@ -33,6 +43,16 @@ impl ParamPath {
         match self {
             ParamPath::Effect { clip, fx, name } => p.active().clip(*clip)?.video.effects.iter().find(|e| e.id == *fx)?.params.get(name),
             ParamPath::Opacity(clip) => Some(&p.active().clip(*clip)?.video.opacity),
+            ParamPath::Mixer { track, prop } => {
+                let m = match track {
+                    Some(t) => &p.active().audio_tracks.iter().find(|x| x.id == *t)?.mixer,
+                    None => &p.active().master,
+                };
+                Some(if *prop == 0 { &m.volume_db } else { &m.pan })
+            }
+            ParamPath::TrackEffect { track, fx, name } => {
+                p.active().audio_tracks.iter().find(|x| x.id == *track)?.effects.iter().find(|e| e.id == *fx)?.params.get(name)
+            }
             ParamPath::Window { clip, node, idx, prop } => {
                 let w = p.active().clip(*clip)?.video.grade.nodes.iter().find(|n| n.id == *node)?.windows.get(*idx)?;
                 Some(match prop {
@@ -50,6 +70,7 @@ impl ParamPath {
             ParamPath::Effect { clip, .. } | ParamPath::Opacity(clip) | ParamPath::Window { clip, .. } => {
                 Some(p.active().clip(*clip)?.start)
             }
+            ParamPath::Mixer { .. } | ParamPath::TrackEffect { .. } => Some(Time::ZERO),
         }
     }
 
@@ -59,6 +80,24 @@ impl ParamPath {
                 p.active_mut().clip_mut(*clip)?.video.effects.iter_mut().find(|e| e.id == *fx)?.params.get_mut(name)
             }
             ParamPath::Opacity(clip) => Some(&mut p.active_mut().clip_mut(*clip)?.video.opacity),
+            ParamPath::Mixer { track, prop } => {
+                let seq = p.active_mut();
+                let m = match track {
+                    Some(t) => &mut seq.audio_tracks.iter_mut().find(|x| x.id == *t)?.mixer,
+                    None => &mut seq.master,
+                };
+                Some(if *prop == 0 { &mut m.volume_db } else { &mut m.pan })
+            }
+            ParamPath::TrackEffect { track, fx, name } => p
+                .active_mut()
+                .audio_tracks
+                .iter_mut()
+                .find(|x| x.id == *track)?
+                .effects
+                .iter_mut()
+                .find(|e| e.id == *fx)?
+                .params
+                .get_mut(name),
             ParamPath::Window { clip, node, idx, prop } => {
                 let w = p.active_mut().clip_mut(*clip)?.video.grade.nodes.iter_mut().find(|n| n.id == *node)?.windows.get_mut(*idx)?;
                 Some(match prop {

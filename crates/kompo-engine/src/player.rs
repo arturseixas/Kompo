@@ -368,6 +368,16 @@ impl Player {
         node
     }
 
+    /// Offline EBU R128 measurement of the whole sequence mix.
+    pub fn measure_loudness(&mut self) -> kompo_audio::dsp_lib::loudness::LoudnessSummary {
+        let seq = self.sequence().clone();
+        for (media, path, stream) in crate::export::audio_sources(&self.project, &seq) {
+            let _ = self.audio_cache.ensure_blocking(media, &path, stream);
+        }
+        let program = build_program(&self.project, &seq, &self.audio_cache);
+        kompo_audio::measure(&program, 0, program.length)
+    }
+
     /// The current picture at `w x h` as display-encoded RGBA8 (scopes). Does
     /// not touch playback statistics.
     pub fn scope_frame(&mut self, w: u32, h: u32) -> Option<Vec<u8>> {

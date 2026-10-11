@@ -15,7 +15,8 @@ pub mod sync;
 
 pub use conform::{ConformedAudio, PcmSource, SymphoniaSource};
 pub use engine::{AudioEngine, DeviceInfo};
-pub use mix::{MixClip, MixProgram, MixState, MixTrack};
+pub use filmcraft_audio_dsp as dsp_lib;
+pub use mix::{MixClip, MixProgram, MixState, MixTrack, measure};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {

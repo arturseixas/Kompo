@@ -925,7 +925,7 @@ pub fn sequence_frame_path(base: &Path, n: i64) -> PathBuf {
 }
 
 /// Media streams the audio mix of `seq` reads.
-fn audio_sources(project: &Project, seq: &Sequence) -> Vec<(MediaId, PathBuf, usize)> {
+pub fn audio_sources(project: &Project, seq: &Sequence) -> Vec<(MediaId, PathBuf, usize)> {
     let mut out: Vec<(MediaId, PathBuf, usize)> = Vec::new();
     for track in seq.audio_tracks.iter() {
         for clip in track.clips.iter() {

@@ -2,6 +2,7 @@
 //! headless by the UI benchmark and tests.
 
 pub mod app;
+pub mod audio_ui;
 pub mod color_ui;
 pub mod effects_ui;
 pub mod export_ui;

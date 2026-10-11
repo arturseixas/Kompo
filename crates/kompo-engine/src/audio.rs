@@ -244,7 +244,13 @@ pub fn build_program(project: &Project, seq: &Sequence, cache: &AudioCache) -> M
                 fade_out: fade(&clip.transition_out),
             });
         }
-        tracks.push(MixTrack { clips, strip: track.mixer.clone(), mute: !track.enabled || track.mixer.mute, solo: track.solo });
+        tracks.push(MixTrack {
+            clips,
+            effects: track.effects.clone(),
+            strip: track.mixer.clone(),
+            mute: !track.enabled || track.mixer.mute,
+            solo: track.solo,
+        });
     }
     MixProgram { sample_rate: rate, channels: cache.channels, tracks, master: seq.master.clone(), length: seq.duration().to_samples(rate) }
 }

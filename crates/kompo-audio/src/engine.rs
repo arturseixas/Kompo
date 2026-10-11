@@ -253,6 +253,11 @@ impl AudioEngine {
         self.meters.lock().as_ref().map(|m| [m.master.get(0), m.master.get(1)]).unwrap_or([0.0; 2])
     }
 
+    /// Latest master loudness (EBU R128), if the mixer has produced any.
+    pub fn loudness(&self) -> Option<crate::meter::LoudnessReading> {
+        self.meters.lock().as_ref().map(|m| m.loudness.get())
+    }
+
     /// Latest peak per track (linear, stereo).
     pub fn track_peaks(&self) -> Vec<[f32; 2]> {
         self.meters.lock().as_ref().map(|m| m.tracks.iter().map(|t| [t.get(0), t.get(1)]).collect()).unwrap_or_default()
@@ -403,12 +408,7 @@ fn mixer_thread(
                 Cmd::Program(p) => {
                     program = p;
                     state.sync(&program);
-                    *meters.lock() = Some(crate::meter::MeterBank {
-                        sample_rate: program.sample_rate,
-                        channels,
-                        tracks: state.meters.tracks.clone(),
-                        master: state.meters.master.clone(),
-                    });
+                    *meters.lock() = Some(state.meters.shared());
                 }
                 Cmd::Play(t) => {
                     shared.playing.store(false, Ordering::Release);

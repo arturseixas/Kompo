@@ -91,6 +91,7 @@ pub struct KompoApp {
     pub export: crate::export_ui::ExportUi,
     pub fx: crate::effects_ui::FxState,
     pub color: crate::color_ui::ColorState,
+    pub audio: crate::audio_ui::AudioState,
 }
 
 impl KompoApp {
@@ -131,6 +132,7 @@ impl KompoApp {
             export: crate::export_ui::ExportUi::new(None),
             fx: Default::default(),
             color: Default::default(),
+            audio: Default::default(),
             launch: launch.clone(),
         };
         if launch.multicam && launch.files.len() >= 2 {
@@ -1122,13 +1124,23 @@ impl KompoApp {
         }
         let rs = self.render_state.clone();
         let rev = self.history.revision();
-        let shown = self.viewer.show(ui, viewer_rect, &mut self.player, rs.as_ref(), rev);
+        let shown = if self.page == Page::Audio {
+            let upper = Rect::from_min_max(full.min, egui::pos2(full.right(), upper_bottom - transport_h));
+            crate::audio_ui::show(ui, upper, &mut self.history, &mut self.audio, &mut self.player);
+            if self.player.is_playing() {
+                ui.ctx().request_repaint();
+            }
+            self.sync_player();
+            viewer::Shown::default()
+        } else {
+            self.viewer.show(ui, viewer_rect, &mut self.player, rs.as_ref(), rev)
+        };
         if self.page == Page::Color
             && let Some(clip) = target
         {
             crate::color_ui::viewer_overlay(ui, shown.image, &mut self.history, &self.color, clip, self.player.playhead());
         }
-        if !has_media {
+        if !has_media && self.page != Page::Audio {
             ui.painter().text(
                 viewer_rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -1285,6 +1297,7 @@ impl KompoApp {
         self.export.queue_window(ui);
         crate::params_ui::graph_window(ui.ctx(), &mut self.history, &mut self.fx.graph, self.player.playhead());
         crate::params_ui::graph_window(ui.ctx(), &mut self.history, &mut self.color.graph, self.player.playhead());
+        crate::params_ui::graph_window(ui.ctx(), &mut self.history, &mut self.audio.graph, self.player.playhead());
         self.close_guard(ui);
         self.autosave();
     }

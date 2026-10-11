@@ -1628,6 +1628,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "filmcraft-audio-dsp"
+version = "0.6.0"
+
+[[package]]
 name = "filmcraft-color"
 version = "0.6.0"
 dependencies = [
@@ -2231,6 +2235,7 @@ dependencies = [
  "crossbeam-channel",
  "dirs",
  "ebur128",
+ "filmcraft-audio-dsp",
  "kompo-core",
  "log",
  "parking_lot",

@@ -44,6 +44,8 @@ impl MixClip {
 #[derive(Clone)]
 pub struct MixTrack {
     pub clips: Vec<MixClip>,
+    /// Free effect chain of the track (`audio.<id>` effects).
+    pub effects: Vec<kompo_core::effects::EffectInstance>,
     /// Track mixer; volume/pan keyframe times are absolute sequence times.
     pub strip: TrackMixer,
     pub mute: bool,
@@ -126,13 +128,24 @@ pub fn render(program: &MixProgram, state: &mut MixState, start: i64, out: &mut 
         let audible = !track.mute && !track.strip.mute && (!any_solo || track.solo);
         let track_buf = &mut state.track_buf;
         track_buf.fill(0.0);
-        let mut active = false;
-        for clip in track.clips.iter().filter(|c| c.start < end && c.end() > start) {
-            active = true;
-            mix_clip(clip, start, frames, ch, rate, &mut state.clip_buf, &mut state.scratch, track_buf);
+        let strip = ChannelStrip::with_effects(&track.strip, &track.effects);
+        // Strips with look-ahead (noise reduction, limiter) are fed that many samples ahead so
+        // their output lines up with the timeline.
+        let latency = strip.prepare(&mut state.tracks[ti], time_at(start, rate)) as i64;
+        if latency > 0 && !state.tracks[ti].is_primed() {
+            let mut warm = vec![0.0f32; latency as usize * ch];
+            for clip in track.clips.iter().filter(|c| c.start < start + latency && c.end() > start) {
+                mix_clip(clip, start, latency as usize, ch, rate, &mut state.clip_buf, &mut state.scratch, &mut warm);
+            }
+            strip.process(&mut state.tracks[ti], &mut warm, ch);
+            state.tracks[ti].mark_primed();
         }
-        // Track strip: EQ / dynamics / noise reduction, then volume + pan automation.
-        let strip = ChannelStrip::new(&track.strip);
+        let (rs, re) = (start + latency, end + latency);
+        let mut active = false;
+        for clip in track.clips.iter().filter(|c| c.start < re && c.end() > rs) {
+            active = true;
+            mix_clip(clip, rs, frames, ch, rate, &mut state.clip_buf, &mut state.scratch, track_buf);
+        }
         if active || state.tracks[ti].is_ringing() {
             strip.process(&mut state.tracks[ti], track_buf, ch);
         }
@@ -145,12 +158,30 @@ pub fn render(program: &MixProgram, state: &mut MixState, start: i64, out: &mut 
         }
     }
     let master = ChannelStrip::new(&program.master);
+    master.prepare(&mut state.master, time_at(start, rate));
     master.process(&mut state.master, out, ch);
     apply_volume_pan(&program.master.volume_db, &program.master.pan, start, frames, ch, rate, out);
     if program.master.mute {
         out.fill(0.0);
     }
     state.meters.master(out, ch);
+}
+
+/// Renders `program` offline and returns its loudness summary (EBU R128).
+pub fn measure(program: &MixProgram, from: i64, to: i64) -> filmcraft_audio_dsp::loudness::LoudnessSummary {
+    let ch = program.channels as usize;
+    let mut state = MixState::new(program);
+    let mut meter = filmcraft_audio_dsp::LoudnessMeter::new(program.sample_rate as f64, ch);
+    let mut buf = vec![0.0f32; 4800 * ch];
+    let mut pos = from;
+    while pos < to {
+        let n = ((to - pos) as usize).min(4800);
+        buf.resize(n * ch, 0.0);
+        render(program, &mut state, pos, &mut buf);
+        meter.process_interleaved(&buf);
+        pos += n as i64;
+    }
+    meter.summary()
 }
 
 #[allow(clippy::too_many_arguments)]

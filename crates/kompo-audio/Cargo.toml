@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 kompo-core.workspace = true
+filmcraft-audio-dsp.workspace = true
 cpal.workspace = true
 symphonia.workspace = true
 rubato.workspace = true
