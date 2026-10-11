@@ -28,6 +28,7 @@ egui-wgpu.workspace = true
 wgpu.workspace = true
 rfd.workspace = true
 dirs.workspace = true
+kompo-fx.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true

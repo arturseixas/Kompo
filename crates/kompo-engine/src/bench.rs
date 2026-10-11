@@ -173,7 +173,18 @@ pub fn layered_project(path: &Path, layers: usize, effects_per_layer: &[&str]) -
             v.video.opacity = kompo_core::AnimatedParam::float(0.85);
         }
         for kind in effects_per_layer {
-            v.video.effects.push(kompo_core::effects::EffectInstance::new(*kind));
+            if let Some(mut fx) = kompo_fx::new_instance(kind, [seq.format.width as f64, seq.format.height as f64]) {
+                // non-identity settings so the effect really runs
+                let set: &[(&str, f64)] = match *kind {
+                    "kompo.blur.gaussian" => &[("blurriness", 12.0)],
+                    "kompo.color.basic" => &[("exposure", 0.3), ("contrast", 15.0), ("saturation", 115.0)],
+                    _ => &[],
+                };
+                for (k, val) in set {
+                    fx.params.insert((*k).to_string(), kompo_core::AnimatedParam::float(*val));
+                }
+                v.video.effects.push(fx);
+            }
         }
         seq.video_tracks[i].insert_sorted(v);
         if i == 0

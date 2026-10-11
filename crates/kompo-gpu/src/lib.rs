@@ -11,6 +11,7 @@ pub mod cpu;
 pub mod gpu;
 pub mod graph;
 pub mod image;
+pub mod ops;
 pub mod pack;
 
 pub use context::{GpuContext, GpuError};
@@ -18,6 +19,7 @@ pub use cpu::CpuRenderer;
 pub use gpu::GpuRenderer;
 pub use graph::{Affine, CompositeNode, Layer, Node, NodeRef, OutputSpec};
 pub use image::CpuImage;
+pub use ops::{CpuOp, Lut3D};
 
 /// Either backend, chosen at startup.
 pub enum Renderer {

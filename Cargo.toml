@@ -8,10 +8,13 @@ members = [
     "crates/kompo-color",
     "crates/kompo-motion",
     "crates/kompo-ofx",
+    "crates/kompo-fx",
     "crates/kompo-engine",
     "crates/kompo-app",
 ]
 default-members = ["crates/kompo-app"]
+# Vendored upstream workspaces (MIT OR Apache-2.0), built from their own manifests.
+exclude = ["third_party/effectcraft", "third_party/filmcraft"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,6 +26,18 @@ publish = false
 
 [workspace.dependencies]
 kompo-core = { path = "crates/kompo-core" }
+kompo-fx = { path = "crates/kompo-fx" }
+effectcraft-effects = { path = "third_party/effectcraft/crates/effects" }
+effectcraft-keyframe = { path = "third_party/effectcraft/crates/keyframe" }
+effectcraft-raster = { path = "third_party/effectcraft/crates/raster" }
+effectcraft-project = { path = "third_party/effectcraft/crates/project" }
+effectcraft-color = { path = "third_party/effectcraft/crates/color" }
+effectcraft-track = { path = "third_party/effectcraft/crates/track" }
+effectcraft-path = { path = "third_party/effectcraft/crates/path" }
+effectcraft-text = { path = "third_party/effectcraft/crates/text" }
+filmcraft-audio-dsp = { path = "third_party/filmcraft/crates/audio-dsp" }
+filmcraft-scopes = { path = "third_party/filmcraft/crates/scopes" }
+filmcraft-color = { path = "third_party/filmcraft/crates/color" }
 kompo-media = { path = "crates/kompo-media" }
 kompo-gpu = { path = "crates/kompo-gpu" }
 kompo-audio = { path = "crates/kompo-audio" }

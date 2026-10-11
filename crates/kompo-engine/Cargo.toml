@@ -17,6 +17,7 @@ kompo-audio.workspace = true
 kompo-color.workspace = true
 kompo-motion.workspace = true
 kompo-ofx.workspace = true
+kompo-fx.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 log.workspace = true

@@ -311,3 +311,18 @@ quadro. O clipe multicam na timeline guarda o ângulo ativo; cortar para outro
 ângulo (teclas 1–9 ou clique na grade do viewer) divide o clipe no playhead e
 muda o ângulo da parte da direita. O áudio segue um ângulo fixo
 (`audio_angle`), como em Premiere/Resolve.
+
+## D16 — Código de terceiros (effectcraft e filmcraft)
+
+**Decisão:** reaproveitar, em `third_party/`, crates das bibliotecas abertas `effectcraft` e `filmcraft` (licença dupla
+MIT OR Apache-2.0, escolhida pelo usuário): biblioteca de efeitos (300+), keyframes estilo After Effects, DSP de áudio, scopes.
+
+**Por quê:** são Rust puro, sem dependências nativas, já testados, e cobrem exatamente o que as fases 3–5 pedem. Escrever
+300 efeitos do zero não cabe no escopo; o que importa para o produto é a integração (grafo, GPU, UI, keyframes), que é nossa.
+
+**Como:** árvores vendorizadas como workspaces Cargo próprios (não misturam lints/fmt com os nossos); `THIRD_PARTY_NOTICES.md`
+registra origem e licença. A integração fica em crates nossos (`kompo-fx` para efeitos) — o resto do Kompo não importa nada de
+`third_party` diretamente. Efeitos da biblioteca rodam na CPU (`CpuOp` no grafo); os efeitos nativos (`kompo.*`: blur gaussiano,
+cor por LUT 3D) rodam na GPU e são o caminho de tempo real.
+
+**Custo:** efeitos da biblioteca exigem leitura da GPU para a CPU e de volta (documentado em PERFORMANCE.md).

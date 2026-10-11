@@ -296,3 +296,43 @@ fn packed_export_planes_match_cpu() {
         }
     }
 }
+
+struct Invert;
+impl kompo_gpu::CpuOp for Invert {
+    fn name(&self) -> String {
+        "invert".into()
+    }
+    fn apply(&self, input: &CpuImage) -> CpuImage {
+        let mut out = input.clone();
+        for p in out.data.chunks_mut(4) {
+            for c in 0..3 {
+                p[c] = (p[3] - p[c]).max(0.0);
+            }
+        }
+        out
+    }
+}
+
+#[test]
+fn lut_blur_and_cpu_ops_match() {
+    let base = frame_node(yuv420(96, 64));
+    // a non-trivial LUT: gain + channel mix in linear light
+    let lut = Arc::new(kompo_gpu::Lut3D::bake(33, |c| [c[0] * 1.2 + 0.02 * c[1], c[1] * 0.9, (c[2] + c[0] * 0.1).min(4.0)]));
+    let graded = Node::lut(base.clone(), lut);
+    compare(&graded, 0.02, 0.003);
+    let blurred = Node::blur(base.clone(), [3.0, 1.5]);
+    compare(&blurred, 0.01, 0.002);
+    let inverted = Node::cpu(Node::blur(base, [2.0, 2.0]), Arc::new(Invert));
+    compare(&inverted, 0.01, 0.002);
+}
+
+#[test]
+fn identity_lut_is_identity() {
+    let lut = kompo_gpu::Lut3D::identity(33);
+    assert!(lut.is_identity(1e-4));
+    let img = CpuImage::filled(4, 4, [0.18, 0.5, 2.0, 1.0]);
+    let out = lut.apply(&img);
+    for (a, b) in img.data.iter().zip(&out.data) {
+        assert!((a - b).abs() < 0.03 * a.max(1.0), "{a} vs {b}");
+    }
+}

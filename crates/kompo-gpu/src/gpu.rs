@@ -180,6 +180,9 @@ pub struct GpuRenderer {
     /// How many converted source frames to keep (scrubbing back and forth).
     pub frame_cache_size: usize,
     pack: Option<wgpu::ComputePipeline>,
+    lut_pl: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
+    blur_pl: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
+    luts: Vec<(Arc<crate::ops::Lut3D>, wgpu::TextureView)>,
 }
 
 fn transfer_src(src: &str) -> String {
@@ -345,6 +348,9 @@ impl GpuRenderer {
             uploads: 0,
             frame_cache_size: 8,
             pack: None,
+            lut_pl: None,
+            blur_pl: None,
+            luts: Vec::new(),
             ctx,
         }
     }
@@ -630,9 +636,203 @@ impl GpuRenderer {
                 Arc::new(t)
             }
             Node::Composite(c) => self.eval_composite(enc, c, memo),
+            Node::Lut { input, lut } => {
+                let src = self.eval(enc, input, memo);
+                Arc::new(self.run_lut(enc, &src, lut))
+            }
+            Node::Blur { input, sigma } => {
+                let src = self.eval(enc, input, memo);
+                self.run_blur(enc, src, *sigma, memo)
+            }
+            Node::Cpu { input, op } => {
+                let src = self.eval(enc, input, memo);
+                match self.read_tex(enc, &src) {
+                    Ok(img) => Arc::new(self.upload_image(&op.apply(&img))),
+                    Err(e) => {
+                        log::warn!("{}: readback failed: {e}", op.name());
+                        src
+                    }
+                }
+            }
         };
         memo.done.insert(key, t.clone());
         t
+    }
+
+    /// Submits what is recorded so far and reads `t` back to system memory.
+    fn read_tex(&mut self, enc: &mut wgpu::CommandEncoder, t: &Tex) -> Result<CpuImage, GpuError> {
+        let fresh = self.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("kompo cpu op") });
+        let old = std::mem::replace(enc, fresh);
+        self.ctx.queue.submit(Some(old.finish()));
+        let data = readback(&self.ctx, &t.texture, t.width, t.height, 8)?;
+        Ok(CpuImage {
+            width: t.width,
+            height: t.height,
+            data: bytemuck::cast_slice::<u8, half::f16>(&data).iter().map(|v| v.to_f32()).collect(),
+        })
+    }
+
+    fn aux_pipeline(
+        &self,
+        label: &str,
+        src: &str,
+        entries: &[wgpu::BindGroupLayoutEntry],
+    ) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+        let device = &self.ctx.device;
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(label), entries });
+        let module =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(src.into()) });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
+        });
+        let pl = fullscreen_pipeline(device, &module, &layout, "fs_main", WORKING_FORMAT, None);
+        (bgl, pl)
+    }
+
+    fn run_lut(&mut self, enc: &mut wgpu::CommandEncoder, src: &Tex, lut: &Arc<crate::ops::Lut3D>) -> Tex {
+        if self.lut_pl.is_none() {
+            let entry = |binding: u32, ty: wgpu::BindingType| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty,
+                count: None,
+            };
+            let tex = |dim| wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: dim,
+                multisampled: false,
+            };
+            let entries = [
+                entry(
+                    0,
+                    wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                ),
+                entry(1, tex(wgpu::TextureViewDimension::D2)),
+                entry(2, tex(wgpu::TextureViewDimension::D3)),
+                entry(3, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+            ];
+            self.lut_pl = Some(self.aux_pipeline("lut", include_str!("shaders/lut.wgsl"), &entries));
+        }
+        let view = match self.luts.iter().find(|(l, _)| Arc::ptr_eq(l, lut)) {
+            Some((_, v)) => v.clone(),
+            None => {
+                let n = lut.size;
+                let tex = self.ctx.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("lut3d"),
+                    size: wgpu::Extent3d { width: n, height: n, depth_or_array_layers: n },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D3,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let texels = lut.to_rgba_f16();
+                self.ctx.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    bytemuck::cast_slice(&texels),
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 8), rows_per_image: Some(n) },
+                    wgpu::Extent3d { width: n, height: n, depth_or_array_layers: n },
+                );
+                let view = tex.create_view(&Default::default());
+                if self.luts.len() >= 24 {
+                    self.luts.remove(0);
+                }
+                self.luts.push((lut.clone(), view.clone()));
+                view
+            }
+        };
+        let (bgl, pl) = self.lut_pl.as_ref().unwrap();
+        let ubuf = self.ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("lut params"),
+            contents: bytemuck::bytes_of(&[lut.size as f32, 0.0, 0.0, 0.0]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bg = self.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lut"),
+            layout: bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&src.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+        let out = self.pool.acquire(&self.ctx.device, src.width, src.height, WORKING_FORMAT);
+        {
+            let mut pass = begin_pass(enc, &out.view, None);
+            pass.set_pipeline(pl);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        out
+    }
+
+    fn run_blur(&mut self, enc: &mut wgpu::CommandEncoder, src: Arc<Tex>, sigma: [f32; 2], memo: &mut Memo) -> Arc<Tex> {
+        if self.blur_pl.is_none() {
+            let entries = [
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ];
+            self.blur_pl = Some(self.aux_pipeline("blur", include_str!("shaders/blur.wgsl"), &entries));
+        }
+        let mut cur = src;
+        for (axis, dir) in [(0usize, [1.0f32, 0.0]), (1, [0.0, 1.0])] {
+            let s = sigma[axis];
+            if s <= 0.0 {
+                continue;
+            }
+            let radius = (s * 3.0).ceil().min(crate::ops::MAX_BLUR_RADIUS as f32);
+            let (bgl, pl) = self.blur_pl.as_ref().unwrap();
+            let ubuf = self.ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("blur params"),
+                contents: bytemuck::bytes_of(&[dir[0], dir[1], s, radius]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bg = self.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blur"),
+                layout: bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&cur.view) },
+                ],
+            });
+            let out = self.pool.acquire(&self.ctx.device, cur.width, cur.height, WORKING_FORMAT);
+            {
+                let mut pass = begin_pass(enc, &out.view, None);
+                pass.set_pipeline(pl);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            memo.temps.push(cur);
+            cur = Arc::new(out);
+        }
+        cur
     }
 
     /// Returns textures used during a frame to the pool (except cached frames).

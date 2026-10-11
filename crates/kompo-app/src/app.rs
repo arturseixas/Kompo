@@ -60,6 +60,10 @@ pub struct Launch {
     pub select_first: bool,
     /// Build a multicam from the files given on the command line (demo/testing).
     pub multicam: bool,
+    /// Effects to add to the first video clip (demo/testing): catalog ids.
+    pub add_fx: Vec<String>,
+    /// Transition kind to add at the head of the first video clip (demo/testing).
+    pub add_transition: Option<String>,
 }
 
 const AUTOSAVE_EVERY: Duration = Duration::from_secs(180);
@@ -83,6 +87,7 @@ pub struct KompoApp {
     allow_close: bool,
     last_autosave: Instant,
     pub export: crate::export_ui::ExportUi,
+    pub fx: crate::effects_ui::FxState,
 }
 
 impl KompoApp {
@@ -121,6 +126,7 @@ impl KompoApp {
             allow_close: false,
             last_autosave: Instant::now(),
             export: crate::export_ui::ExportUi::new(None),
+            fx: Default::default(),
             launch: launch.clone(),
         };
         if launch.multicam && launch.files.len() >= 2 {
@@ -150,6 +156,16 @@ impl KompoApp {
             && let Some(c) = app.history.project().active().video_tracks.iter().flat_map(|t| t.clips.iter()).next()
         {
             app.timeline.selection = edit::with_linked(app.history.project().active(), &[c.id]);
+        }
+        let first = app.history.project().active().video_tracks.iter().flat_map(|t| t.clips.iter()).next().map(|c| (c.id, c.start));
+        if let Some((clip, start)) = first {
+            for fx in &launch.add_fx {
+                crate::effects_ui::add_effect(&mut app.history, clip, fx, start);
+            }
+            if let Some(t) = &launch.add_transition {
+                crate::effects_ui::add_transition(&mut app.history, clip, t, start);
+            }
+            app.sync_player();
         }
         if launch.play {
             app.player.play();
@@ -998,9 +1014,22 @@ impl KompoApp {
     pub fn page_content(&mut self, ui: &mut Ui) {
         let full = ui.available_rect_before_wrap();
         let has_media = !self.history.project().media.is_empty();
-        let pool_w = if has_media && self.page == Page::Cut { 250.0 } else { 0.0 };
-        let has_sel = !self.timeline.selection.is_empty() && self.page == Page::Cut;
-        let insp_w = if has_sel { 290.0 } else { 0.0 };
+        let target = crate::effects_ui::target_clip(&self.history, &self.timeline.selection, self.player.playhead());
+        let pool_w = match self.page {
+            Page::Cut if has_media => 250.0,
+            Page::Effects => 270.0,
+            _ => 0.0,
+        };
+        let has_sel = match self.page {
+            Page::Cut => !self.timeline.selection.is_empty(),
+            Page::Effects => target.is_some(),
+            _ => false,
+        };
+        let insp_w = match self.page {
+            Page::Effects if has_sel => 340.0,
+            _ if has_sel => 290.0,
+            _ => 0.0,
+        };
         let timeline_h = (full.height() * 0.42).clamp(160.0, 520.0);
         let transport_h = 36.0;
         let toolbar_h = 26.0;
@@ -1014,7 +1043,22 @@ impl KompoApp {
         let toolbar_rect = Rect::from_min_max(egui::pos2(full.left(), upper_bottom), egui::pos2(full.right(), upper_bottom + toolbar_h));
         let timeline_rect = Rect::from_min_max(egui::pos2(full.left(), upper_bottom + toolbar_h), full.max);
 
-        if pool_w > 0.0 {
+        if pool_w > 0.0 && self.page == Page::Effects {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(pool_rect.shrink2(Vec2::new(theme::SPACE_3, 0.0))));
+            if let Some(a) = crate::effects_ui::library(&mut child, &mut self.fx)
+                && let Some(clip) = target
+            {
+                let ph = self.player.playhead();
+                match a {
+                    crate::effects_ui::LibraryAction::AddEffect(k) => crate::effects_ui::add_effect(&mut self.history, clip, &k, ph),
+                    crate::effects_ui::LibraryAction::AddTransition(k) => {
+                        crate::effects_ui::add_transition(&mut self.history, clip, &k, ph)
+                    }
+                }
+                self.sync_player();
+            }
+            widgets::vline(ui, pool_rect.right(), pool_rect.top(), pool_rect.bottom());
+        } else if pool_w > 0.0 {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(pool_rect.shrink2(Vec2::new(theme::SPACE_3, 0.0))));
             let action = egui::ScrollArea::vertical()
                 .id_salt("pool")
@@ -1030,9 +1074,11 @@ impl KompoApp {
         if insp_w > 0.0 {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(insp_rect.shrink2(Vec2::new(theme::SPACE_4, 0.0))));
             let before = self.history.revision();
-            egui::ScrollArea::vertical()
-                .id_salt("inspector")
-                .show(&mut child, |ui| inspector::show(ui, &mut self.history, &self.timeline.selection, self.player.playhead()));
+            let playhead = self.player.playhead();
+            egui::ScrollArea::vertical().id_salt("inspector").show(&mut child, |ui| match (self.page, target) {
+                (Page::Effects, Some(clip)) => crate::effects_ui::controls(ui, &mut self.history, &mut self.fx, clip, playhead),
+                _ => inspector::show(ui, &mut self.history, &self.timeline.selection, playhead),
+            });
             if self.history.revision() != before {
                 self.sync_player();
             }
@@ -1196,6 +1242,7 @@ impl KompoApp {
             self.notify(msg);
         }
         self.export.queue_window(ui);
+        crate::params_ui::graph_window(ui.ctx(), &mut self.history, &mut self.fx.graph, self.player.playhead());
         self.close_guard(ui);
         self.autosave();
     }

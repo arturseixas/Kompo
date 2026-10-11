@@ -2,9 +2,11 @@
 //! headless by the UI benchmark and tests.
 
 pub mod app;
+pub mod effects_ui;
 pub mod export_ui;
 pub mod inspector;
 pub mod media_pool;
+pub mod params_ui;
 pub mod theme;
 pub mod timeline;
 pub mod viewer;
@@ -25,6 +27,8 @@ pub fn parse_args() -> Launch {
             "--seek" => l.seek = args.next().and_then(|v| v.parse().ok()),
             "--select-first" => l.select_first = true,
             "--multicam" => l.multicam = true,
+            "--add-fx" => l.add_fx.extend(args.next()),
+            "--add-transition" => l.add_transition = args.next(),
             "--help" | "-h" => {
                 println!("kompo [FILES...] [--page cut|color|audio|effects|motion] [--play] [--seek SECONDS] [--screenshot OUT.png]");
                 std::process::exit(0);

@@ -100,6 +100,21 @@ pub enum Node {
         color: [f32; 4],
     },
     Composite(CompositeNode),
+    /// A CPU operation (effects, text, masks, OFX) applied to `input`.
+    Cpu {
+        input: NodeRef,
+        op: Arc<dyn crate::ops::CpuOp>,
+    },
+    /// Color grading baked into a 3D LUT.
+    Lut {
+        input: NodeRef,
+        lut: Arc<crate::ops::Lut3D>,
+    },
+    /// Gaussian blur with per-axis sigma in pixels.
+    Blur {
+        input: NodeRef,
+        sigma: [f32; 2],
+    },
 }
 
 impl Node {
@@ -109,7 +124,27 @@ impl Node {
             Node::Image(i) => (i.width, i.height),
             Node::Solid { width, height, .. } => (*width, *height),
             Node::Composite(c) => (c.width, c.height),
+            Node::Cpu { input, op } => {
+                let (w, h) = input.size();
+                op.output_size(w, h)
+            }
+            Node::Lut { input, .. } | Node::Blur { input, .. } => input.size(),
         }
+    }
+
+    pub fn cpu(input: NodeRef, op: Arc<dyn crate::ops::CpuOp>) -> NodeRef {
+        Arc::new(Node::Cpu { input, op })
+    }
+
+    pub fn lut(input: NodeRef, lut: Arc<crate::ops::Lut3D>) -> NodeRef {
+        Arc::new(Node::Lut { input, lut })
+    }
+
+    pub fn blur(input: NodeRef, sigma: [f32; 2]) -> NodeRef {
+        if sigma[0] <= 0.0 && sigma[1] <= 0.0 {
+            return input;
+        }
+        Arc::new(Node::Blur { input, sigma })
     }
 
     pub fn frame(frame: SharedFrame, input: InputTransform) -> NodeRef {

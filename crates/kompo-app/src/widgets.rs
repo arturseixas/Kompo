@@ -119,3 +119,9 @@ pub fn hairline(ui: &Ui, y: f32, x0: f32, x1: f32) {
 pub fn vline(ui: &Ui, x: f32, y0: f32, y1: f32) {
     ui.painter().vline(x, y0..=y1, Stroke::new(theme::STROKE, theme::LINE));
 }
+
+/// A full-width hairline at the current layout position.
+pub fn hairline_ui(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, theme::LINE);
+}

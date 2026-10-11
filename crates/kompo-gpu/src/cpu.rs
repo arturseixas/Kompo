@@ -285,6 +285,18 @@ impl CpuRenderer {
                 let inputs: Vec<Arc<CpuImage>> = c.layers.iter().map(|l| self.eval(&l.input, memo)).collect();
                 Arc::new(eval_composite(c, &inputs))
             }
+            Node::Cpu { input, op } => {
+                let src = self.eval(input, memo);
+                Arc::new(op.apply(&src))
+            }
+            Node::Lut { input, lut } => {
+                let src = self.eval(input, memo);
+                Arc::new(lut.apply(&src))
+            }
+            Node::Blur { input, sigma } => {
+                let src = self.eval(input, memo);
+                Arc::new(crate::ops::gaussian_blur(&src, *sigma))
+            }
         };
         memo.insert(key, out.clone());
         out

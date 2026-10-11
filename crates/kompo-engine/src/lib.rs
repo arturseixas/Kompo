@@ -20,6 +20,7 @@ pub use player::{Player, PlayerStats};
 pub use kompo_audio;
 pub use kompo_color;
 pub use kompo_core;
+pub use kompo_fx;
 pub use kompo_gpu;
 pub use kompo_media;
 pub use kompo_motion;
@@ -32,9 +33,9 @@ pub fn headless_renderer() -> kompo_gpu::Renderer {
 }
 
 /// Effect kinds applied per layer in the "3 layers + 2 effects" benchmark.
-/// (Native effects arrive in phase 3; until then the layers are plain.)
+/// Both are native GPU effects of the render graph (blur and 3D-LUT color).
 pub fn bench_effects() -> Vec<&'static str> {
-    Vec::new()
+    vec![kompo_fx::catalog::BLUR, kompo_fx::catalog::COLOR_BASIC]
 }
 
 /// Benchmarks contributed by later phases (project open, UI timeline, ...).
