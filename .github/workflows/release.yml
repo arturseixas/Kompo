@@ -53,7 +53,7 @@ jobs:
           "$env:GITHUB_WORKSPACE\ffmpeg\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: dotnet tool install --global wix
+      - run: dotnet tool install --global wix --version "4.*"   # v5+ requires accepting the OSMF EULA
       - run: ./packaging/build-msi.ps1
         shell: pwsh
       - uses: actions/upload-artifact@v4
