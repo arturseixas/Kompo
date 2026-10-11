@@ -10,13 +10,13 @@ env:
 
 jobs:
   linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04 # FFmpeg >= 6.1 (22.04 has 4.4); the AppImage therefore needs glibc >= 2.39
     steps:
       - uses: actions/checkout@v4
       - name: System dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config clang libclang-dev ffmpeg libfuse2 \
+          sudo apt-get install -y --no-install-recommends pkg-config clang libclang-dev ffmpeg libfuse2t64 \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev \
             libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
       - uses: dtolnay/rust-toolchain@stable
