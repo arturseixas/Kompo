@@ -90,6 +90,7 @@ pub struct KompoApp {
     close_dialog: bool,
     allow_close: bool,
     last_autosave: Instant,
+    pub perf: crate::perf::Perf,
     pub export: crate::export_ui::ExportUi,
     pub fx: crate::effects_ui::FxState,
     pub color: crate::color_ui::ColorState,
@@ -139,6 +140,7 @@ impl KompoApp {
             close_dialog: false,
             allow_close: false,
             last_autosave: Instant::now(),
+            perf: Default::default(),
             export: crate::export_ui::ExportUi::new(None),
             fx: Default::default(),
             color: Default::default(),
@@ -767,6 +769,23 @@ impl KompoApp {
         self.sync_player();
     }
 
+    /// An effect or transition was dropped on `clip` (at timeline time `at`): apply it and show the clip's controls.
+    fn apply_effect_drop(&mut self, clip: ClipId, drag: crate::effects_ui::EffectDrag, at: Time) {
+        use crate::effects_ui::{EffectDrag, add_effect, add_transition};
+        self.timeline.selection = vec![clip];
+        match drag {
+            EffectDrag::Effect(k) => {
+                add_effect(&mut self.history, clip, &k, at);
+                self.notify("Effect added to the clip");
+            }
+            EffectDrag::Transition(k) => {
+                add_transition(&mut self.history, clip, &k, at);
+                self.notify("Transition added to the clip");
+            }
+        }
+        self.sync_player();
+    }
+
     fn zoom_key(&mut self, factor: f32) {
         let ph = self.player.playhead().seconds();
         let x = ((ph - self.timeline.scroll_x) as f32) * self.timeline.px_per_sec;
@@ -839,6 +858,9 @@ impl KompoApp {
             {
                 self.timeline.tool = tool;
             }
+        }
+        if key(Key::F3) {
+            self.perf.show = !self.perf.show;
         }
         if key(Key::S) {
             self.timeline.snapping = !self.timeline.snapping;
@@ -1123,6 +1145,13 @@ impl KompoApp {
                     ui.close();
                 }
             });
+            ui.menu_button(RichText::new("View").color(theme::TEXT_2), |ui| {
+                let label = if self.perf.show { "Hide performance overlay" } else { "Show performance overlay" };
+                if item(ui, label, "F3") {
+                    self.perf.show = !self.perf.show;
+                    ui.close();
+                }
+            });
             ui.add_space(theme::SPACE_5);
             ui.label(RichText::new(&self.history.project().name).font(theme::strong()).color(theme::TEXT));
             if self.history.is_dirty() {
@@ -1161,25 +1190,67 @@ impl KompoApp {
     }
 
     fn tool_bar(&mut self, ui: &mut Ui) {
+        use widgets::{Icon, tool_button, toolbar_sep};
+        let has_sel = !self.timeline.selection.is_empty();
+        let can_undo = self.history.undo_label().is_some();
+        let can_redo = self.history.redo_label().is_some();
         ui.horizontal_centered(|ui| {
-            ui.add_space(theme::SPACE_2);
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.add_space(theme::SPACE_3);
+            // editing tools
             for tool in Tool::ALL {
+                let icon = match tool {
+                    Tool::Select => Some(Icon::Select),
+                    Tool::Razor => Some(Icon::Blade),
+                    _ => None,
+                };
                 let tip = format!("{} tool ({})", tool.name(), tool.key());
-                if widgets::text_button(ui, tool.name(), self.timeline.tool == tool).on_hover_text(tip).clicked() {
+                if tool_button(ui, icon, tool.name(), self.timeline.tool == tool, true).on_hover_text(tip).clicked() {
                     self.timeline.tool = tool;
                 }
             }
-            ui.add_space(theme::SPACE_4);
-            if widgets::text_button(ui, "Snap", self.timeline.snapping).on_hover_text("Snapping (S)").clicked() {
+            toolbar_sep(ui);
+            // actions
+            if tool_button(ui, Some(Icon::Split), "Split", false, true)
+                .on_hover_text("Split the clips under the playhead (Ctrl+K)")
+                .clicked()
+            {
+                self.add_edit(false);
+            }
+            if tool_button(ui, Some(Icon::Trash), "Delete", false, has_sel).on_hover_text("Delete the selected clips (Delete)").clicked() {
+                self.delete_selection(false);
+            }
+            if tool_button(ui, None, "Ripple Delete", false, has_sel).on_hover_text("Delete and close the gap (Shift+Delete)").clicked() {
+                self.delete_selection(true);
+            }
+            toolbar_sep(ui);
+            if tool_button(ui, None, "Undo", false, can_undo).on_hover_text("Undo (Ctrl+Z)").clicked() {
+                self.undo();
+            }
+            if tool_button(ui, None, "Redo", false, can_redo).on_hover_text("Redo (Ctrl+Shift+Z)").clicked() {
+                self.redo();
+            }
+            toolbar_sep(ui);
+            if tool_button(ui, Some(Icon::Magnet), "Snap", self.timeline.snapping, true).on_hover_text("Snapping (S)").clicked() {
                 self.timeline.snapping = !self.timeline.snapping;
             }
             if self.player.multicam_at_playhead().is_some()
-                && widgets::text_button(ui, "Multicam", self.viewer.multicam)
+                && tool_button(ui, None, "Multicam", self.viewer.multicam, true)
                     .on_hover_text("Multicam view (Shift+0); 1–9 cut to angle")
                     .clicked()
             {
                 self.viewer.multicam = !self.viewer.multicam;
             }
+            // timeline zoom, right-aligned
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(theme::SPACE_3);
+                if tool_button(ui, Some(Icon::ZoomIn), "", false, true).on_hover_text("Zoom in (=)").clicked() {
+                    self.zoom_key(1.5);
+                }
+                if tool_button(ui, Some(Icon::ZoomOut), "", false, true).on_hover_text("Zoom out (−)").clicked() {
+                    self.zoom_key(1.0 / 1.5);
+                }
+            });
         });
     }
 
@@ -1209,7 +1280,7 @@ impl KompoApp {
         };
         let timeline_h = (full.height() * 0.42).clamp(160.0, 520.0);
         let transport_h = 36.0;
-        let toolbar_h = 26.0;
+        let toolbar_h = 36.0;
         let upper_bottom = full.bottom() - timeline_h - toolbar_h;
         let pool_rect = Rect::from_min_max(full.min, egui::pos2(full.left() + pool_w, upper_bottom));
         let insp_rect = Rect::from_min_max(egui::pos2(full.right() - insp_w, full.top()), egui::pos2(full.right(), upper_bottom));
@@ -1296,6 +1367,23 @@ impl KompoApp {
             let comp = if self.page == Page::Motion { self.motion.comp } else { None };
             self.viewer.show(ui, viewer_rect, &mut self.player, rs.as_ref(), rev, comp)
         };
+        if self.page != Page::Audio {
+            // effects can also be dropped on the viewer: they go to the clip under the playhead
+            let drop = ui.interact(viewer_rect, egui::Id::new("viewer-fx-drop"), egui::Sense::hover());
+            if drop.dnd_hover_payload::<crate::effects_ui::EffectDrag>().is_some() {
+                let c = if target.is_some() { theme::ACCENT } else { theme::DANGER };
+                ui.painter().rect_stroke(viewer_rect.shrink(2.0), theme::RADIUS_MD, egui::Stroke::new(2.0, c), egui::StrokeKind::Inside);
+            }
+            if let Some(payload) = drop.dnd_release_payload::<crate::effects_ui::EffectDrag>() {
+                match target {
+                    Some(clip) => {
+                        let at = self.player.playhead();
+                        self.apply_effect_drop(clip, (*payload).clone(), at);
+                    }
+                    None => self.notify("Put a video clip under the playhead first"),
+                }
+            }
+        }
         if self.page == Page::Motion {
             crate::motion_ui::loop_range(&self.history, &self.motion, &mut self.player);
             crate::motion_ui::viewer_drag(ui, shown.image, &mut self.history, &self.motion, self.player.playhead());
@@ -1372,6 +1460,9 @@ impl KompoApp {
         }
         if let Some(s) = resp.status {
             self.notify(s);
+        }
+        if let Some((clip, drag, at)) = resp.effect_dropped {
+            self.apply_effect_drop(clip, drag, at);
         }
         if let Some((media, track, at, insert)) = resp.dropped {
             let (v, a) = match track.kind {
@@ -1455,6 +1546,39 @@ impl KompoApp {
         ui.ctx().request_repaint();
     }
 
+    /// F3: where a frame's time goes.
+    fn perf_overlay(&self, ui: &Ui) {
+        let st = &self.player.stats;
+        let lines = [
+            format!("UI        {:>4.0} fps   {:.1} ms (worst {:.0} ms)", self.perf.fps(), self.perf.cpu_ms(), self.perf.cpu_max_ms()),
+            format!("Viewer    render {:.1} ms   compose {:.1} ms", self.viewer.render_ms, st.compose_ms),
+            format!(
+                "Frames    shown {}   late {}   (now: late {}, missing {})",
+                st.frames_presented, st.frames_late, st.last_late, st.last_missing
+            ),
+            format!("Decode    {}   decoders {}", st.hardware_decode.unwrap_or("software"), st.active_decoders),
+            format!("GPU       {}", self.player.renderer.name()),
+        ];
+        egui::Area::new(egui::Id::new("perf-overlay"))
+            .anchor(egui::Align2::RIGHT_TOP, [-12.0, 44.0])
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(theme::BG_BASE.gamma_multiply(0.92))
+                    .stroke(egui::Stroke::new(1.0, theme::LINE_STRONG))
+                    .corner_radius(egui::CornerRadius::same(theme::RADIUS_MD))
+                    .inner_margin(egui::Margin::same(theme::SPACE_3 as i8))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        for l in lines {
+                            ui.label(RichText::new(l).font(theme::mono()).color(theme::TEXT));
+                        }
+                    });
+            });
+        ui.ctx().request_repaint_after(Duration::from_millis(500));
+    }
+
     /// One UI frame (shared by the window and the headless UI benchmark).
     pub fn frame(&mut self, ui: &mut Ui) {
         self.shortcuts(ui);
@@ -1494,7 +1618,16 @@ impl eframe::App for KompoApp {
         if self.proxies.is_busy() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
+        let began = self.perf.begin();
         self.frame(ui);
         self.screenshot(ui);
+        let (page, playing, resolution) = (self.page.name(), self.player.is_playing(), self.viewer.resolution);
+        let render_ms = self.viewer.render_ms;
+        self.perf.end(began, || format!("page {page}, playing {playing}, viewer render {render_ms:.0} ms, resolution 1/{resolution}"));
+        let st = &self.player.stats;
+        self.perf.summary(playing, st.frames_presented, st.frames_late, render_ms);
+        if self.perf.show {
+            self.perf_overlay(ui);
+        }
     }
 }

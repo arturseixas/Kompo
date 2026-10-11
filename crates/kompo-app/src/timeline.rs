@@ -130,6 +130,8 @@ pub struct TimelineResponse {
     pub status: Option<String>,
     /// Media dropped from the pool: (media, track, time, insert?)
     pub dropped: Option<(Vec<MediaId>, TrackRef, Time, bool)>,
+    /// An effect or transition dropped from the library onto a video clip: (clip, what, time under the pointer)
+    pub effect_dropped: Option<(ClipId, crate::effects_ui::EffectDrag, Time)>,
 }
 
 struct Row {
@@ -452,6 +454,35 @@ impl TimelineState {
             let t = l.t_of(p.x).max(Time::ZERO).snap_to_frame(seq.format.frame_rate);
             let (corr, _) = snap_time(&seq, self, env.playhead, &[], &[t], l.pps);
             out.dropped = Some((payload.0.clone(), row.r, t + corr, mods.command));
+        }
+
+        // ---- drag & drop of effects / transitions from the library
+        let fx_hit = match (resp.dnd_hover_payload::<crate::effects_ui::EffectDrag>(), pointer) {
+            (Some(_), Some(p)) => Some(hit(&seq, &l, p)),
+            _ => None,
+        };
+        if let Some(Hit::Clip { id, r, .. }) = fx_hit
+            && let Some((_, _, c)) = seq.find_clip(id)
+            && let Some(row) = l.row_of(r)
+        {
+            let ok = r.kind == TrackKind::Video;
+            let color = if ok { theme::ACCENT } else { theme::DANGER };
+            let cr = l.clip_rect(row, c);
+            lane_clip.rect_filled(
+                cr,
+                theme::RADIUS_SM,
+                if ok { theme::ACCENT_FAINT } else { theme::lerp(theme::BG_BASE, theme::DANGER, 0.2) },
+            );
+            lane_clip.rect_stroke(cr, theme::RADIUS_SM, Stroke::new(theme::STROKE_FOCUS, color), StrokeKind::Inside);
+        }
+        if let Some(payload) = resp.dnd_release_payload::<crate::effects_ui::EffectDrag>()
+            && let Some(p) = pointer
+        {
+            match hit(&seq, &l, p) {
+                Hit::Clip { id, r, .. } if r.kind == TrackKind::Video => out.effect_dropped = Some((id, (*payload).clone(), l.t_of(p.x))),
+                Hit::Clip { .. } => out.status = Some("Effects go on video clips".into()),
+                _ => out.status = Some("Drop the effect on a clip".into()),
+            }
         }
 
         // ---- ghosts while moving

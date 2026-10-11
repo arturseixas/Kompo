@@ -32,6 +32,44 @@ pub enum LibraryAction {
     AddTransition(String),
 }
 
+/// What is being dragged out of the library onto a clip (or the viewer).
+#[derive(Clone, Debug)]
+pub enum EffectDrag {
+    Effect(String),
+    Transition(String),
+}
+
+/// One library entry: a full-width row that can be dragged (grab cursor, ghost follows the pointer) or double-clicked.
+fn library_row(ui: &mut Ui, id: egui::Id, name: &str, tag: Option<&str>, payload: EffectDrag) -> egui::Response {
+    let resp = ui
+        .dnd_drag_source(id, payload, |ui| {
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), theme::ROW_HEIGHT), egui::Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(rect, theme::RADIUS_MD, theme::BG_HOVER);
+            }
+            let color = if resp.hovered() { theme::TEXT } else { theme::lerp(theme::TEXT_2, theme::TEXT, 0.6) };
+            ui.painter().text(
+                egui::pos2(rect.left() + theme::SPACE_4, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                name,
+                theme::body(),
+                color,
+            );
+            if let Some(tag) = tag {
+                ui.painter().text(
+                    egui::pos2(rect.right() - theme::SPACE_3, rect.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    tag,
+                    theme::caption(),
+                    theme::TEXT_3,
+                );
+            }
+            resp
+        })
+        .inner;
+    resp.on_hover_cursor(egui::CursorIcon::Grab)
+}
+
 /// The effects library panel.
 pub fn library(ui: &mut Ui, st: &mut FxState) -> Option<LibraryAction> {
     let mut action = None;
@@ -45,6 +83,8 @@ pub fn library(ui: &mut Ui, st: &mut FxState) -> Option<LibraryAction> {
         }
     });
     ui.add(egui::TextEdit::singleline(&mut st.query).hint_text("Search").desired_width(f32::INFINITY));
+    ui.add_space(theme::SPACE_2);
+    ui.label(RichText::new("Drag an effect onto a clip in the timeline or the viewer").font(theme::caption()).color(theme::TEXT_3));
     ui.add_space(theme::SPACE_2);
     let q = st.query.to_lowercase();
     egui::ScrollArea::vertical().id_salt("fx-library").show(ui, |ui| match st.tab {
@@ -67,12 +107,12 @@ pub fn library(ui: &mut Ui, st: &mut FxState) -> Option<LibraryAction> {
                 }
                 if open {
                     for e in items {
-                        let label = if e.native { format!("   {}  ·", e.name) } else { format!("   {}", e.name) };
-                        let r = ui.add(egui::Label::new(RichText::new(label).color(theme::TEXT)).sense(egui::Sense::click()));
+                        let id = egui::Id::new(("fx-drag", &e.id));
+                        let r = library_row(ui, id, &e.name, e.native.then_some("GPU"), EffectDrag::Effect(e.id.clone()));
                         if r.double_clicked() {
                             action = Some(LibraryAction::AddEffect(e.id.clone()));
                         }
-                        r.on_hover_text("Double-click to apply to the selected clip");
+                        r.on_hover_text("Drag onto a clip, or double-click to apply to the selected clip");
                     }
                 }
             }
@@ -85,11 +125,12 @@ pub fn library(ui: &mut Ui, st: &mut FxState) -> Option<LibraryAction> {
                     ui.label(RichText::new(&t.category).color(theme::TEXT_2));
                     last = t.category.clone();
                 }
-                let r = ui.add(egui::Label::new(RichText::new(format!("   {}", t.name)).color(theme::TEXT)).sense(egui::Sense::click()));
+                let id = egui::Id::new(("tr-drag", &t.id));
+                let r = library_row(ui, id, &t.name, None, EffectDrag::Transition(t.id.clone()));
                 if r.double_clicked() {
                     action = Some(LibraryAction::AddTransition(t.id.clone()));
                 }
-                r.on_hover_text("Double-click to add at the cut nearest the playhead");
+                r.on_hover_text("Drag onto the start or end of a clip, or double-click to add at the cut nearest the playhead");
             }
         }
     });

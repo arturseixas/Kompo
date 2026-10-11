@@ -10,6 +10,7 @@ pub mod inspector;
 pub mod media_pool;
 pub mod motion_ui;
 pub mod params_ui;
+pub mod perf;
 pub mod supervisor;
 pub mod theme;
 pub mod timeline;
@@ -113,6 +114,7 @@ pub fn run() -> eframe::Result {
     log::info!("Kompo {} starting ({} {})", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
     let launch = parse_args();
     let mut wgpu_options = egui_wgpu::WgpuConfiguration::default();
+    wgpu_options.surface.desired_maximum_frame_latency = Some(1); // clicks and drags show up one frame sooner
     if let egui_wgpu::WgpuSetup::CreateNew(c) = &mut wgpu_options.wgpu_setup {
         c.device_descriptor = std::sync::Arc::new(kompo_engine::kompo_gpu::context::device_descriptor);
     }
