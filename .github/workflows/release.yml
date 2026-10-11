@@ -58,6 +58,9 @@ jobs:
         shell: pwsh
       - uses: actions/upload-artifact@v4
         with: { name: msi, path: target/Kompo.msi }
+      - name: Smoke test (install, start the editor, uninstall)
+        shell: pwsh
+        run: ./packaging/windows/smoke-test.ps1
 
   publish:
     if: startsWith(github.ref, 'refs/tags/')

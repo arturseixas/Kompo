@@ -10,6 +10,7 @@ pub mod inspector;
 pub mod media_pool;
 pub mod motion_ui;
 pub mod params_ui;
+pub mod supervisor;
 pub mod theme;
 pub mod timeline;
 pub mod viewer;
@@ -67,9 +68,13 @@ impl std::io::Write for Tee {
     }
 }
 
-fn init_logging() {
+/// `append`: a supervised child adds to the log its supervisor started instead of replacing it.
+pub(crate) fn init_logging(append: bool) {
     let file = log_path().and_then(|p| {
         std::fs::create_dir_all(p.parent()?).ok()?;
+        if append {
+            return std::fs::OpenOptions::new().create(true).append(true).open(p).ok();
+        }
         let _ = std::fs::rename(&p, p.with_file_name("kompo.previous.log")); // keep the run before this one
         std::fs::File::create(p).ok()
     });
@@ -79,7 +84,10 @@ fn init_logging() {
 }
 
 /// Tells the user that Kompo is stopping: a console window may close before it can be read.
-fn show_fatal(what: &str) {
+pub(crate) fn show_fatal(what: &str) {
+    if std::env::var_os(supervisor::CHILD_ENV).is_some() || std::env::var_os("KOMPO_NO_DIALOG").is_some() {
+        return; // the supervisor reports it, once, after it knows whether another graphics backend can start
+    }
     let log = log_path().map(|p| format!("\n\nLog: {}", p.display())).unwrap_or_default();
     rfd::MessageDialog::new().set_level(rfd::MessageLevel::Error).set_title("Kompo").set_description(format!("{what}{log}")).show();
 }
@@ -93,9 +101,14 @@ fn install_panic_hook() {
     }));
 }
 
+fn window_icon() -> Option<egui::IconData> {
+    let img = image::load_from_memory(include_bytes!("../assets/icon.png")).ok()?.to_rgba8();
+    Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
+}
+
 /// Runs the application window.
 pub fn run() -> eframe::Result {
-    init_logging();
+    init_logging(std::env::var_os(supervisor::CHILD_ENV).is_some());
     install_panic_hook();
     log::info!("Kompo {} starting ({} {})", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
     let launch = parse_args();
@@ -103,16 +116,16 @@ pub fn run() -> eframe::Result {
     if let egui_wgpu::WgpuSetup::CreateNew(c) = &mut wgpu_options.wgpu_setup {
         c.device_descriptor = std::sync::Arc::new(kompo_engine::kompo_gpu::context::device_descriptor);
     }
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Kompo")
-            .with_inner_size([1600.0, 940.0])
-            .with_min_inner_size([960.0, 600.0])
-            .with_drag_and_drop(true),
-        renderer: eframe::Renderer::Wgpu,
-        wgpu_options,
-        ..Default::default()
-    };
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("Kompo")
+        .with_inner_size([1600.0, 940.0])
+        .with_min_inner_size([960.0, 600.0])
+        .with_maximized(launch.screenshot.is_none())
+        .with_drag_and_drop(true);
+    if let Some(icon) = window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
+    let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, wgpu_options, ..Default::default() };
     log::info!("creating the window and the GPU device");
     let result = eframe::run_native(
         "Kompo",

@@ -1,21 +1,52 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="Kompo" Manufacturer="Kompo" Version="$(var.Version)" UpgradeCode="6f1d3c52-8b0e-4c8e-9a53-3a1f6a4b7d10" Scope="perMachine">
+    <SummaryInformation Description="Kompo — video editor" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of Kompo is already installed." />
     <MediaTemplate EmbedCab="yes" />
+
+    <!-- Add/Remove Programs entry -->
+    <Icon Id="KompoIcon" SourceFile="$(var.PackagingDir)\kompo.ico" />
+    <Property Id="ARPPRODUCTICON" Value="KompoIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/arturseixas/Kompo" />
+
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Kompo" />
     </StandardDirectory>
+
     <Feature Id="Main" Title="Kompo" Level="1">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="Shortcut" />
+      <ComponentRef Id="DesktopShortcut" />
     </Feature>
+
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="Shortcut" Guid="0b9a2a1c-5e6d-4b0e-8c27-91d2f7c4a3e8">
-        <Shortcut Id="StartMenu" Name="Kompo" Target="[INSTALLFOLDER]kompo.exe" WorkingDirectory="INSTALLFOLDER" />
+        <Shortcut Id="StartMenu" Name="Kompo" Description="Video editor" Target="[INSTALLFOLDER]kompo.exe" WorkingDirectory="INSTALLFOLDER" Icon="KompoIcon" />
         <RegistryValue Root="HKCU" Key="Software\Kompo" Name="installed" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="4d0c7e7a-2f0b-4f55-9a52-6a4f3b8f1e21">
+        <Shortcut Id="DesktopLink" Name="Kompo" Description="Video editor" Target="[INSTALLFOLDER]kompo.exe" WorkingDirectory="INSTALLFOLDER" Icon="KompoIcon" />
+        <RegistryValue Root="HKCU" Key="Software\Kompo" Name="desktop" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- Setup wizard: welcome → install folder → install → "Open Kompo" on the last page.
+         The project has no license text yet, so the license page is skipped. -->
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.PackagingDir)\banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.PackagingDir)\dialog.bmp" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Open Kompo" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <UI>
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="4" Condition="NOT Installed" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="4" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchKompo" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+    </UI>
+    <!-- runs as the user who installed (not elevated) and does not hold the installer open -->
+    <CustomAction Id="LaunchKompo" FileRef="fkompo" ExeCommand="" Execute="immediate" Impersonate="yes" Return="asyncNoWait" />
   </Package>
   <Fragment>
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">

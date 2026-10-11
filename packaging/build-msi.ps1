@@ -16,5 +16,10 @@ $items = Get-ChildItem $dist -File | ForEach-Object {
 }
 $wxs = (Get-Content packaging\windows\kompo.wxs -Raw).Replace("<!-- target\dist\*.exe and *.dll are harvested by build-msi.ps1 -->", ($items -join "`n"))
 Set-Content target\kompo.generated.wxs $wxs
-wix build target\kompo.generated.wxs -d Version=$version -arch x64 -o target\Kompo.msi
+# the wizard UI is an extension; its version must match the wix tool
+$wixVersion = (wix --version).Split("+")[0]
+wix extension add -g "WixToolset.UI.wixext/$wixVersion"
+if ($LASTEXITCODE -ne 0) { throw "could not add the WiX UI extension" }
+wix build target\kompo.generated.wxs -ext WixToolset.UI.wixext -d Version=$version -d PackagingDir="$PWD\packaging\windows" -arch x64 -o target\Kompo.msi
+if ($LASTEXITCODE -ne 0) { throw "wix build failed" }
 Write-Host "target\Kompo.msi"
