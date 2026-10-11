@@ -281,7 +281,7 @@ fn apply_volume_pan(vol: &AnimatedParam, pan: &AnimatedParam, start: i64, frames
         let p = pan.eval_f64(Time::ZERO);
         if ch == 2 && p != 0.0 {
             let (l, r) = balance_gains(p);
-            for f in buf.chunks_exact_mut(2) {
+            for f in buf.as_chunks_mut::<2>().0.iter_mut() {
                 f[0] *= g * l;
                 f[1] *= g * r;
             }
