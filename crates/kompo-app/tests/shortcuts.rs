@@ -8,13 +8,17 @@ use kompo_engine::kompo_media::testmedia::{self, TestClipSpec};
 use std::path::PathBuf;
 
 fn media() -> PathBuf {
-    let d = std::env::temp_dir().join("kompo-app-tests");
-    std::fs::create_dir_all(&d).unwrap();
-    let p = d.join("ui.mp4");
-    if !p.exists() {
-        testmedia::generate(&p, &TestClipSpec::h264(160, 120, 100)).unwrap();
-    }
-    p
+    // generated once per process: tests run in parallel and Windows refuses to open a file another test is writing
+    static MEDIA: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    MEDIA
+        .get_or_init(|| {
+            let d = std::env::temp_dir().join("kompo-app-tests");
+            std::fs::create_dir_all(&d).unwrap();
+            let p = d.join(format!("ui-{}.mp4", std::process::id()));
+            testmedia::generate(&p, &TestClipSpec::h264(160, 120, 100)).unwrap();
+            p
+        })
+        .clone()
 }
 
 struct Harness {

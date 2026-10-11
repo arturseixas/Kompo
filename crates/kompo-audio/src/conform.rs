@@ -243,8 +243,10 @@ fn bytemuck_cast_mut(v: &mut [f32]) -> &mut [u8] {
 fn read_peaks(path: &Path) -> Option<Vec<[f32; 2]>> {
     let data = std::fs::read(path).ok()?;
     Some(
-        data.chunks_exact(8)
-            .map(|c| [f32::from_le_bytes(c[0..4].try_into().unwrap()), f32::from_le_bytes(c[4..8].try_into().unwrap())])
+        data.as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| [f32::from_le_bytes([c[0], c[1], c[2], c[3]]), f32::from_le_bytes([c[4], c[5], c[6], c[7]])])
             .collect(),
     )
 }

@@ -438,7 +438,7 @@ impl GpuRenderer {
                 let mut half_data = Vec::with_capacity(row_floats * ph as usize);
                 for y in 0..ph as usize {
                     let row = &f.plane(i)[y * f.stride(i)..y * f.stride(i) + row_floats * 4];
-                    half_data.extend(row.chunks_exact(4).map(|b| half::f16::from_f32(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))));
+                    half_data.extend(row.as_chunks::<4>().0.iter().map(|b| half::f16::from_f32(f32::from_le_bytes(*b))));
                 }
                 self.upload_plane(bytemuck::cast_slice(&half_data), row_floats * 2, pw, ph, fmt)
             } else {

@@ -160,7 +160,7 @@ fn stream_rotation(stream: &ff::format::stream::Stream) -> i32 {
         if sd.kind() == ff::codec::packet::side_data::Type::DisplayMatrix {
             let data = sd.data();
             if data.len() >= 36 {
-                let m: Vec<i32> = data.chunks_exact(4).take(9).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+                let m: Vec<i32> = data.as_chunks::<4>().0.iter().take(9).map(|c| i32::from_le_bytes(*c)).collect();
                 let a = m[0] as f64 / 65536.0;
                 let b = m[1] as f64 / 65536.0;
                 let deg = -b.atan2(a).to_degrees();

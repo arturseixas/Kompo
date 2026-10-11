@@ -1208,7 +1208,7 @@ fn write_image(path: &Path, format: ImageFormat, w: u32, h: u32, data: ImageData
     match (format, data) {
         (ImageFormat::Exr, ImageData::Linear(img)) => kompo_media::image_io::write_exr(path, img.width, img.height, &img.data)?,
         (ImageFormat::Png16, ImageData::Packed(planes)) => {
-            let words: Vec<u16> = planes[0].data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            let words: Vec<u16> = planes[0].data.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
             kompo_media::image_io::write_rgba16_png(path, w, h, &words)?
         }
         (_, ImageData::Packed(planes)) => kompo_media::image_io::write_rgba8(path, w, h, &planes[0].data)?,
