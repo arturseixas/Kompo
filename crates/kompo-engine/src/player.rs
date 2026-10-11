@@ -194,7 +194,7 @@ impl Player {
     /// Plays at `speed` (1 = normal, negative = reverse). Audio is heard only at 1x.
     pub fn play_at(&mut self, speed: f64) {
         self.refresh_program(false);
-        if self.playhead >= self.sequence().duration() && speed > 0.0 {
+        if self.playhead >= self.limit() && speed > 0.0 {
             self.playhead = Time::ZERO;
         }
         self.playing = true;
@@ -252,7 +252,7 @@ impl Player {
 
     /// Moves the playhead (scrubbing keeps playing if it was playing).
     pub fn seek(&mut self, t: Time) {
-        let t = t.clamp(Time::ZERO, self.sequence().duration().max(Time::ZERO));
+        let t = t.clamp(Time::ZERO, self.limit().max(Time::ZERO));
         self.playhead = t;
         if self.playing {
             self.anchor = (Instant::now(), t);
@@ -278,12 +278,17 @@ impl Player {
         self.anchor.1 + Time::from_seconds(elapsed * self.speed)
     }
 
+    /// End of what can be played: the loop range (a motion composition) or the sequence.
+    fn limit(&self) -> Time {
+        self.loop_range.map(|r| r.end()).unwrap_or_else(|| self.sequence().duration())
+    }
+
     /// Advances the playhead from the clock. Call once per UI frame.
     pub fn tick(&mut self) -> Time {
         self.refresh_program(false);
         if self.playing {
             let mut t = self.clock_time();
-            let end = self.sequence().duration();
+            let end = self.limit();
             if let Some(lr) = self.loop_range
                 && t >= lr.end()
             {
@@ -366,6 +371,25 @@ impl Player {
         self.stats.active_decoders = self.servers.len();
         self.stats.hardware_decode = self.servers.values().find_map(|s| s.stats().hardware);
         node
+    }
+
+    /// Graph of a motion composition at `t` (the Motion page's viewer).
+    pub fn compose_comp(&mut self, comp: kompo_core::id::CompId, t: Time, width: u32, height: u32) -> Option<NodeRef> {
+        let c = self.project.compositions.get(&comp)?.clone();
+        let mut frames = Frames {
+            servers: &mut self.servers,
+            stills: &mut self.stills,
+            playing: self.playing,
+            opts: &self.decoder_options,
+            blocking: None,
+            late: 0,
+            missing: 0,
+        };
+        let node =
+            crate::compose::compose_composition(&self.project, &c, t, width, height, self.project.settings.working_space, &mut frames);
+        self.stats.last_late = frames.late;
+        self.stats.last_missing = frames.missing;
+        Some(node)
     }
 
     /// Offline EBU R128 measurement of the whole sequence mix.

@@ -110,7 +110,15 @@ impl Viewer {
     }
 
     /// Draws the viewer image into `rect`.
-    pub fn show(&mut self, ui: &mut Ui, rect: Rect, player: &mut Player, rs: Option<&egui_wgpu::RenderState>, revision: u64) -> Shown {
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        player: &mut Player,
+        rs: Option<&egui_wgpu::RenderState>,
+        revision: u64,
+        comp: Option<kompo_engine::kompo_core::id::CompId>,
+    ) -> Shown {
         let mut out = Shown::default();
         let mc = if self.multicam { player.multicam_at_playhead() } else { None };
         let mc_angles = mc.and_then(|(_, id, _)| player.project().multicams.get(&id).map(|m| m.angles.len()));
@@ -119,7 +127,10 @@ impl Viewer {
             self.last_multicam = mc_angles.is_some();
         }
         ui.painter().rect_filled(rect, 0.0, theme::BG_BASE);
-        let fmt = player.sequence().format.clone();
+        let mut fmt = player.sequence().format.clone();
+        if let Some(c) = comp.and_then(|id| player.project().compositions.get(&id)) {
+            (fmt.width, fmt.height) = (c.width, c.height);
+        }
         let (w, h, shown) = self.frame_size(rect, ui.ctx().pixels_per_point(), fmt.width, fmt.height);
         out.image = shown;
         let key = RenderKey { playhead: player.playhead(), revision, size: (w, h) };
@@ -127,9 +138,11 @@ impl Viewer {
         let spec = OutputSpec::display(player.project().settings.working_space);
         if need {
             let start = std::time::Instant::now();
-            let node = match mc_angles {
-                Some(_) => player.compose_multicam(w, h).unwrap_or_else(|| player.compose(w, h)),
-                None => player.compose(w, h),
+            let comp_node = comp.and_then(|id| player.compose_comp(id, player.playhead(), w, h));
+            let node = match (comp_node, mc_angles) {
+                (Some(n), _) => n,
+                (None, Some(_)) => player.compose_multicam(w, h).unwrap_or_else(|| player.compose(w, h)),
+                (None, None) => player.compose(w, h),
             };
             match (&mut player.renderer, rs) {
                 (Renderer::Gpu(g), Some(rs)) => {

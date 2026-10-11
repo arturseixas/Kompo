@@ -11,8 +11,18 @@ workspace = true
 
 [dependencies]
 kompo-core.workspace = true
+kompo-gpu.workspace = true
+kompo-fx.workspace = true
+kompo-color.workspace = true
+effectcraft-geom.workspace = true
+effectcraft-path.workspace = true
+effectcraft-text.workspace = true
+effectcraft-raster.workspace = true
+effectcraft-keyframe.workspace = true
+kurbo.workspace = true
 thiserror.workspace = true
 log.workspace = true
-glam.workspace = true
-tiny-skia.workspace = true
-ab_glyph.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+kompo-gpu.workspace = true

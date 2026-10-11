@@ -127,7 +127,15 @@ fn clip_source(
             let _ = asset;
             clip_source(project, &alias, t, opts, frames, canvas_scale)
         }
-        ClipSource::Composition(_) => None,
+        ClipSource::Composition(cid) => {
+            let comp = project.compositions.get(cid)?;
+            let t_comp = clip.source_time(t);
+            let k = canvas_scale.clamp(0.1, 1.0);
+            let (rw, rh) = (((comp.width as f32 * k).round() as u32).max(1), ((comp.height as f32 * k).round() as u32).max(1));
+            let mut footage = MotionFootage { project, frames, opts, canvas_scale };
+            let node = kompo_motion::render_comp(project, comp, t_comp, kompo_motion::RenderOpts { width: rw, height: rh }, &mut footage);
+            Some((node, comp.width as f32, comp.height as f32, 1.0))
+        }
     }
 }
 
@@ -307,4 +315,43 @@ fn clip_layer(
         }
     }
     Some(Layer { input: node, transform, opacity: opacity.min(1.0), blend: clip.video.blend, crop })
+}
+
+/// The render graph of a motion composition at its own time `t` (previews and precomps).
+pub fn compose_composition(
+    project: &Project,
+    comp: &kompo_core::motion::Composition,
+    t: Time,
+    width: u32,
+    height: u32,
+    working: kompo_core::project::WorkingSpace,
+    frames: &mut dyn FrameProvider,
+) -> NodeRef {
+    let opts = ComposeOptions { width, height, working };
+    let canvas_scale = width as f32 / comp.width.max(1) as f32;
+    let mut footage = MotionFootage { project, frames, opts: &opts, canvas_scale };
+    kompo_motion::render_comp(project, comp, t, kompo_motion::RenderOpts { width, height }, &mut footage)
+}
+
+/// Footage layers of a motion composition, decoded like clips.
+struct MotionFootage<'a> {
+    project: &'a Project,
+    frames: &'a mut dyn FrameProvider,
+    opts: &'a ComposeOptions,
+    canvas_scale: f32,
+}
+
+impl kompo_motion::Footage for MotionFootage<'_> {
+    fn footage(
+        &mut self,
+        layer: kompo_core::id::LayerId,
+        media: kompo_core::id::MediaId,
+        t: Time,
+        scale: f32,
+    ) -> Option<(NodeRef, f32, f32, f32)> {
+        let mut alias = Clip::new("footage", ClipSource::Media { media, stream: 0 }, Time::ZERO, Time::from_seconds(3600.0), Time::ZERO);
+        // one decoder per layer
+        alias.id = kompo_core::id::ClipId::from_u128(layer.as_u128());
+        clip_source(self.project, &alias, t, self.opts, self.frames, scale.min(self.canvas_scale).max(0.05))
+    }
 }

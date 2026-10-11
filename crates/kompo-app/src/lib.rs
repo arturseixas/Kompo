@@ -8,6 +8,7 @@ pub mod effects_ui;
 pub mod export_ui;
 pub mod inspector;
 pub mod media_pool;
+pub mod motion_ui;
 pub mod params_ui;
 pub mod theme;
 pub mod timeline;
@@ -29,6 +30,7 @@ pub fn parse_args() -> Launch {
             "--seek" => l.seek = args.next().and_then(|v| v.parse().ok()),
             "--select-first" => l.select_first = true,
             "--multicam" => l.multicam = true,
+            "--demo-motion" => l.demo_motion = true,
             "--demo-grade" => l.demo_grade = true,
             "--add-fx" => l.add_fx.extend(args.next()),
             "--add-transition" => l.add_transition = args.next(),

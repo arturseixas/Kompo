@@ -27,6 +27,8 @@ publish = false
 [workspace.dependencies]
 kompo-core = { path = "crates/kompo-core" }
 kompo-fx = { path = "crates/kompo-fx" }
+effectcraft-geom = { path = "third_party/effectcraft/crates/geom" }
+kurbo = "0.13"
 effectcraft-effects = { path = "third_party/effectcraft/crates/effects" }
 effectcraft-keyframe = { path = "third_party/effectcraft/crates/keyframe" }
 effectcraft-raster = { path = "third_party/effectcraft/crates/raster" }

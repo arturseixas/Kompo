@@ -64,6 +64,8 @@ pub struct Launch {
     pub add_fx: Vec<String>,
     /// Applies a teal-and-orange look with a window to the first video clip (demo/testing).
     pub demo_grade: bool,
+    /// Builds a motion composition with text, shapes, parenting and an expression (demo/testing).
+    pub demo_motion: bool,
     /// Transition kind to add at the head of the first video clip (demo/testing).
     pub add_transition: Option<String>,
 }
@@ -92,6 +94,7 @@ pub struct KompoApp {
     pub fx: crate::effects_ui::FxState,
     pub color: crate::color_ui::ColorState,
     pub audio: crate::audio_ui::AudioState,
+    pub motion: crate::motion_ui::MotionState,
 }
 
 impl KompoApp {
@@ -133,6 +136,7 @@ impl KompoApp {
             fx: Default::default(),
             color: Default::default(),
             audio: Default::default(),
+            motion: Default::default(),
             launch: launch.clone(),
         };
         if launch.multicam && launch.files.len() >= 2 {
@@ -192,10 +196,81 @@ impl KompoApp {
             }
             app.sync_player();
         }
+        if launch.demo_motion {
+            app.demo_motion();
+        }
         if launch.play {
             app.player.play();
         }
         app
+    }
+
+    /// A small title animation: typewriter text, a swinging parented shape and a wiggling star.
+    pub fn demo_motion(&mut self) {
+        use kompo_engine::kompo_core::animation::{AnimatedParam, ParamValue};
+        use kompo_engine::kompo_core::motion::{AnimatorBasis, Layer, LayerKind, ShapeItem, TextAnimator, TextLayer};
+        crate::motion_ui::new_comp(&mut self.history, &mut self.motion);
+        let Some(cid) = self.motion.comp else { return };
+        let secs = |s: f64| Time::from_seconds(s);
+        self.history.edit("Demo motion", move |p| {
+            let Some(c) = p.compositions.get_mut(&cid) else { return };
+            c.name = "Title".into();
+            c.background = [0.07, 0.07, 0.09, 1.0];
+            let (w, h) = (c.width as f64, c.height as f64);
+            let mut bar = Layer::new(
+                "Bar",
+                LayerKind::Shape(vec![ShapeItem::rect(w * 0.5, 8.0).filled([0.95, 0.64, 0.23, 1.0])]),
+                Time::ZERO,
+                secs(10.0),
+            );
+            bar.transform.position = AnimatedParam::vec2(w * 0.5, h * 0.58);
+            bar.transform.scale.set_keyframe(Time::ZERO, ParamValue::Vec2([0.0, 1.0]));
+            bar.transform.scale.set_keyframe(secs(1.2), ParamValue::Vec2([1.0, 1.0]));
+            for k in &mut bar.transform.scale.keyframes {
+                *k = k.clone().eased();
+            }
+            c.add_layer(bar);
+            let mut t = TextLayer::new("Kompo");
+            t.size = AnimatedParam::float(h * 0.16);
+            let mut a = TextAnimator::new("Typewriter");
+            a.basis = AnimatorBasis::Characters;
+            a.opacity = AnimatedParam::float(0.0);
+            a.start = AnimatedParam::float(0.0);
+            a.end = AnimatedParam::float(100.0);
+            a.offset.set_keyframe(Time::ZERO, ParamValue::Float(0.0));
+            a.offset.set_keyframe(secs(1.5), ParamValue::Float(-100.0));
+            t.animators.push(a);
+            let mut title = Layer::new("Title", LayerKind::Text(t), Time::ZERO, secs(10.0));
+            title.transform.position = AnimatedParam::vec2(w * 0.5, h * 0.45);
+            c.add_layer(title);
+            let mut pivot = Layer::new("Pivot", LayerKind::Null, Time::ZERO, secs(10.0));
+            pivot.transform.position = AnimatedParam::vec2(w * 0.5, h * 0.78);
+            pivot.transform.rotation.expression = "time * 90".into();
+            let pid = c.add_layer(pivot);
+            let mut dot = Layer::new(
+                "Orbit",
+                LayerKind::Shape(vec![ShapeItem::ellipse(40.0, 40.0).filled([0.3, 0.76, 0.54, 1.0])]),
+                Time::ZERO,
+                secs(10.0),
+            );
+            dot.parent = Some(pid);
+            dot.transform.position = AnimatedParam::vec2(120.0, 0.0);
+            c.add_layer(dot);
+            let mut star = Layer::new(
+                "Star",
+                LayerKind::Shape(vec![ShapeItem::star(5.0, 46.0, 20.0).no_fill().with_stroke([1.0, 1.0, 1.0, 1.0], 4.0)]),
+                Time::ZERO,
+                secs(10.0),
+            );
+            star.transform.position = AnimatedParam::vec2(w * 0.85, h * 0.2);
+            star.transform.position.expression = "wiggle(1.5, 25)".into();
+            star.transform.rotation.expression = "time * 40".into();
+            c.add_layer(star);
+        });
+        self.page = Page::Motion;
+        crate::motion_ui::loop_range(&self.history, &self.motion, &mut self.player);
+        self.player.seek(Time::from_seconds(2.0));
+        self.sync_player();
     }
 
     pub fn sync_player(&mut self) {
@@ -1044,16 +1119,19 @@ impl KompoApp {
             Page::Cut if has_media => 250.0,
             Page::Effects => 270.0,
             Page::Color => 320.0,
+            Page::Motion => 300.0,
             _ => 0.0,
         };
         let has_sel = match self.page {
             Page::Cut => !self.timeline.selection.is_empty(),
             Page::Effects | Page::Color => target.is_some(),
+            Page::Motion => true,
             _ => false,
         };
         let insp_w = match self.page {
             Page::Effects if has_sel => 340.0,
             Page::Color if has_sel => 380.0,
+            Page::Motion => 360.0,
             _ if has_sel => 290.0,
             _ => 0.0,
         };
@@ -1085,6 +1163,13 @@ impl KompoApp {
                 self.sync_player();
             }
             widgets::vline(ui, pool_rect.right(), pool_rect.top(), pool_rect.bottom());
+        } else if pool_w > 0.0 && self.page == Page::Motion {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(pool_rect.shrink2(Vec2::new(theme::SPACE_3, 0.0))));
+            egui::ScrollArea::vertical()
+                .id_salt("mo-layers")
+                .show(&mut child, |ui| crate::motion_ui::layers_panel(ui, &mut self.history, &mut self.motion));
+            widgets::vline(ui, pool_rect.right(), pool_rect.top(), pool_rect.bottom());
+            self.sync_player();
         } else if pool_w > 0.0 && self.page == Page::Color {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(pool_rect.shrink2(Vec2::new(theme::SPACE_3, 0.0))));
             let rev = self.history.revision();
@@ -1115,6 +1200,7 @@ impl KompoApp {
             egui::ScrollArea::vertical().id_salt("inspector").show(&mut child, |ui| match (self.page, target) {
                 (Page::Effects, Some(clip)) => crate::effects_ui::controls(ui, &mut self.history, &mut self.fx, clip, playhead),
                 (Page::Color, Some(clip)) => crate::color_ui::controls(ui, &mut self.history, &mut self.color, clip, playhead),
+                (Page::Motion, _) => crate::motion_ui::properties_panel(ui, &mut self.history, &mut self.motion, playhead),
                 _ => inspector::show(ui, &mut self.history, &self.timeline.selection, playhead),
             });
             if self.history.revision() != before {
@@ -1133,14 +1219,21 @@ impl KompoApp {
             self.sync_player();
             viewer::Shown::default()
         } else {
-            self.viewer.show(ui, viewer_rect, &mut self.player, rs.as_ref(), rev)
+            let comp = if self.page == Page::Motion { self.motion.comp } else { None };
+            self.viewer.show(ui, viewer_rect, &mut self.player, rs.as_ref(), rev, comp)
         };
+        if self.page == Page::Motion {
+            crate::motion_ui::loop_range(&self.history, &self.motion, &mut self.player);
+            crate::motion_ui::viewer_drag(ui, shown.image, &mut self.history, &self.motion, self.player.playhead());
+        } else {
+            self.player.set_loop(None);
+        }
         if self.page == Page::Color
             && let Some(clip) = target
         {
             crate::color_ui::viewer_overlay(ui, shown.image, &mut self.history, &self.color, clip, self.player.playhead());
         }
-        if !has_media && self.page != Page::Audio {
+        if !has_media && !matches!(self.page, Page::Audio | Page::Motion) {
             ui.painter().text(
                 viewer_rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -1168,6 +1261,13 @@ impl KompoApp {
         let mut tb = ui.new_child(egui::UiBuilder::new().max_rect(toolbar_rect));
         self.tool_bar(&mut tb);
 
+        if self.page == Page::Motion {
+            let mut tl_ui = ui.new_child(egui::UiBuilder::new().max_rect(timeline_rect));
+            crate::motion_ui::timeline(&mut tl_ui, timeline_rect, &mut self.history, &mut self.motion, &mut self.player);
+            self.sync_player();
+            ui.allocate_rect(full, egui::Sense::hover());
+            return;
+        }
         // timeline
         let rev_before = self.history.revision();
         let resp = {
@@ -1298,6 +1398,11 @@ impl KompoApp {
         crate::params_ui::graph_window(ui.ctx(), &mut self.history, &mut self.fx.graph, self.player.playhead());
         crate::params_ui::graph_window(ui.ctx(), &mut self.history, &mut self.color.graph, self.player.playhead());
         crate::params_ui::graph_window(ui.ctx(), &mut self.history, &mut self.audio.graph, self.player.playhead());
+        crate::params_ui::graph_window(ui.ctx(), &mut self.history, &mut self.motion.graph, self.player.playhead());
+        if let Some(w) = self.motion.graph.want_expression.take() {
+            self.motion.expr_edit = Some(w);
+        }
+        crate::motion_ui::expression_window(ui.ctx(), &mut self.history, &mut self.motion);
         self.close_guard(ui);
         self.autosave();
     }

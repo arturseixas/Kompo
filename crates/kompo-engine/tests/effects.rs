@@ -126,3 +126,26 @@ fn tracker_follows_a_moving_bar() {
         assert!((c[0] - expect).abs() < 0.012, "frame {i}: tracked {:.4}, expected {:.4}", c[0], expect);
     }
 }
+
+#[test]
+fn composition_clip_renders_motion_layers() {
+    use kompo_core::animation::AnimatedParam;
+    use kompo_core::motion::{Composition, Layer, LayerKind, ShapeItem};
+    let mut comp = Composition::new("m", 64, 36, kompo_core::time::FrameRate::FPS_25, Time::from_seconds(2.0));
+    let mut l = Layer::new(
+        "dot",
+        LayerKind::Shape(vec![ShapeItem::ellipse(20.0, 20.0).filled([1.0, 0.0, 0.0, 1.0])]),
+        Time::ZERO,
+        Time::from_seconds(2.0),
+    );
+    l.transform.position = AnimatedParam::vec2(32.0, 18.0);
+    comp.add_layer(l);
+    let cid = comp.id;
+    let clip = Clip::new("motion", ClipSource::Composition(cid), Time::ZERO, Time::from_seconds(2.0), Time::ZERO);
+    let mut p = project_with(vec![clip]);
+    p.compositions.insert(cid, comp);
+    let img = render(&p, 1.0);
+    let c = px(&img, 32, 18);
+    assert!(c[0] > 150 && c[1] < 60, "red dot in the middle: {c:?}");
+    assert!(px(&img, 3, 3)[0] < 20, "background untouched");
+}

@@ -5,7 +5,7 @@ use crate::theme;
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use kompo_engine::kompo_core::animation::{AnimatedParam, Handle, Interp, ParamValue};
 use kompo_engine::kompo_core::history::History;
-use kompo_engine::kompo_core::id::{ClipId, EffectId, NodeId, TrackId};
+use kompo_engine::kompo_core::id::{ClipId, CompId, EffectId, LayerId, NodeId, TrackId};
 use kompo_engine::kompo_core::project::Project;
 use kompo_engine::kompo_core::time::Time;
 use kompo_engine::kompo_fx::FxUi;
@@ -29,6 +29,18 @@ pub enum ParamPath {
         fx: EffectId,
         name: String,
     },
+    /// A property of a motion layer (`transform.position`, `text.size`, `shape.0.fill.color`, ...).
+    Layer {
+        comp: CompId,
+        layer: LayerId,
+        prop: String,
+    },
+    LayerEffect {
+        comp: CompId,
+        layer: LayerId,
+        fx: EffectId,
+        name: String,
+    },
     /// `prop`: 0 center, 1 size, 2 rotation of a power window.
     Window {
         clip: ClipId,
@@ -43,6 +55,10 @@ impl ParamPath {
         match self {
             ParamPath::Effect { clip, fx, name } => p.active().clip(*clip)?.video.effects.iter().find(|e| e.id == *fx)?.params.get(name),
             ParamPath::Opacity(clip) => Some(&p.active().clip(*clip)?.video.opacity),
+            ParamPath::Layer { comp, layer, prop } => p.compositions.get(comp)?.layer(*layer)?.prop(prop),
+            ParamPath::LayerEffect { comp, layer, fx, name } => {
+                p.compositions.get(comp)?.layer(*layer)?.effects.iter().find(|e| e.id == *fx)?.params.get(name)
+            }
             ParamPath::Mixer { track, prop } => {
                 let m = match track {
                     Some(t) => &p.active().audio_tracks.iter().find(|x| x.id == *t)?.mixer,
@@ -71,6 +87,9 @@ impl ParamPath {
                 Some(p.active().clip(*clip)?.start)
             }
             ParamPath::Mixer { .. } | ParamPath::TrackEffect { .. } => Some(Time::ZERO),
+            ParamPath::Layer { comp, layer, .. } | ParamPath::LayerEffect { comp, layer, .. } => {
+                Some(p.compositions.get(comp)?.layer(*layer)?.start)
+            }
         }
     }
 
@@ -80,6 +99,10 @@ impl ParamPath {
                 p.active_mut().clip_mut(*clip)?.video.effects.iter_mut().find(|e| e.id == *fx)?.params.get_mut(name)
             }
             ParamPath::Opacity(clip) => Some(&mut p.active_mut().clip_mut(*clip)?.video.opacity),
+            ParamPath::Layer { comp, layer, prop } => p.compositions.get_mut(comp)?.layer_mut(*layer)?.prop_mut(prop),
+            ParamPath::LayerEffect { comp, layer, fx, name } => {
+                p.compositions.get_mut(comp)?.layer_mut(*layer)?.effects.iter_mut().find(|e| e.id == *fx)?.params.get_mut(name)
+            }
             ParamPath::Mixer { track, prop } => {
                 let seq = p.active_mut();
                 let m = match track {
@@ -230,6 +253,8 @@ pub struct GraphState {
     /// Selected keyframe index.
     pub selected: Option<usize>,
     pub view: Option<(f64, f64)>,
+    /// Set by the context menu: open the expression editor for this property.
+    pub want_expression: Option<(ParamPath, String)>,
 }
 
 fn diamond(ui: &mut Ui, on_key: bool, animated: bool) -> egui::Response {
@@ -280,6 +305,10 @@ pub fn param_row(ui: &mut Ui, history: &mut History, path: &ParamPath, label: &s
             });
         }
         r.context_menu(|ui| {
+            if matches!(path, ParamPath::Layer { .. } | ParamPath::LayerEffect { .. }) && ui.button("Expression…").clicked() {
+                graph.want_expression = Some((path.clone(), label.to_string()));
+                ui.close();
+            }
             if ui.button("Graph Editor").clicked() {
                 graph.open = Some((path.clone(), label.to_string()));
                 graph.selected = None;
