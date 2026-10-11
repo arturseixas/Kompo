@@ -10,15 +10,22 @@ use std::path::PathBuf;
 
 const FRAMES: u32 = 24;
 
-fn project() -> Project {
-    let dir = std::env::temp_dir().join("kompo-export-tests");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("src.mp4");
-    if !path.exists() {
+fn source() -> &'static PathBuf {
+    // generated once per process: tests run in parallel and Windows refuses to open a file another test is writing
+    static SRC: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    SRC.get_or_init(|| {
+        let dir = std::env::temp_dir().join("kompo-export-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("src-{}.mp4", std::process::id()));
         testmedia::generate(&path, &TestClipSpec::h264(640, 360, FRAMES)).unwrap();
-    }
+        path
+    })
+}
+
+fn project() -> Project {
+    let path = source();
     let mut p = Project::new("export");
-    let id = p.add_media(import::probe_asset(&path).unwrap());
+    let id = p.add_media(import::probe_asset(path).unwrap());
     import::match_sequence_to(&mut p, id);
     import::append_to_sequence(&mut p, id);
     p

@@ -301,6 +301,10 @@ fn load_binary(path: &Path) -> Vec<Arc<Loaded>> {
 
 /// Scans `dirs` (default folders when empty), loading each plug-in once.
 pub fn scan(dirs: &[PathBuf]) -> Vec<PluginInfo> {
+    // Check-then-load must be atomic: plug-ins (notably the C++ support library) build their plug-in table lazily and
+    // without locks, so two threads running OfxGetPlugin/Load/Describe on the same binary corrupt it. Load each once.
+    static SCAN: Mutex<()> = Mutex::new(());
+    let _scan = SCAN.lock();
     let dirs: Vec<PathBuf> = if dirs.is_empty() { default_search_paths() } else { dirs.to_vec() };
     let mut found = Vec::new();
     for d in dirs {

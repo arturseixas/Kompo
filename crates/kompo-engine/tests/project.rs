@@ -17,6 +17,8 @@ fn dir() -> PathBuf {
 }
 
 fn clip(name: &str, spec: TestClipSpec) -> PathBuf {
+    static GEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _gen = GEN.lock().unwrap_or_else(|e| e.into_inner()); // exists-then-generate must be atomic across parallel tests
     let p = dir().join(name);
     if !p.exists() {
         testmedia::generate(&p, &spec).unwrap();

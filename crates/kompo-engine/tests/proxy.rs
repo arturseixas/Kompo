@@ -8,6 +8,8 @@ use kompo_media::video::{DecoderOptions, HwAccel, VideoDecoder};
 use std::time::{Duration, Instant};
 
 fn media() -> kompo_core::media::MediaAsset {
+    static GEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _gen = GEN.lock().unwrap_or_else(|e| e.into_inner()); // exists-then-generate must be atomic across parallel tests
     let dir = std::env::temp_dir().join("kompo-proxy-tests");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("src.mp4");

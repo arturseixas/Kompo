@@ -4,6 +4,8 @@ use kompo_media::{DecoderOptions, HwAccel, VideoDecoder};
 use std::path::PathBuf;
 
 fn clip(name: &str, spec: &TestClipSpec) -> PathBuf {
+    static GEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _gen = GEN.lock().unwrap_or_else(|e| e.into_inner()); // exists-then-generate must be atomic across parallel tests
     let dir = std::env::temp_dir().join("kompo-media-tests");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
