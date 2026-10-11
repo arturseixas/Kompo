@@ -32,6 +32,36 @@ pub enum LibraryAction {
     AddTransition(String),
 }
 
+/// A collapsible category row: chevron, name, and how many entries it holds.
+fn category_header(ui: &mut Ui, name: &str, count: usize, open: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), theme::ROW_HEIGHT), egui::Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, theme::RADIUS_MD, theme::BG_HOVER);
+    }
+    let c = egui::pos2(rect.left() + theme::SPACE_4, rect.center().y);
+    let pts = if open {
+        vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(4.0, -2.0), c + egui::vec2(0.0, 3.0)]
+    } else {
+        vec![c + egui::vec2(-2.0, -4.0), c + egui::vec2(-2.0, 4.0), c + egui::vec2(3.0, 0.0)]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(pts, theme::TEXT_2, egui::Stroke::NONE));
+    ui.painter().text(
+        egui::pos2(rect.left() + theme::SPACE_4 + 14.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        name,
+        theme::strong(),
+        theme::TEXT,
+    );
+    ui.painter().text(
+        egui::pos2(rect.right() - theme::SPACE_3, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        count.to_string(),
+        theme::caption(),
+        theme::TEXT_3,
+    );
+    resp
+}
+
 /// What is being dragged out of the library onto a clip (or the viewer).
 #[derive(Clone, Debug)]
 pub enum EffectDrag {
@@ -98,10 +128,7 @@ pub fn library(ui: &mut Ui, st: &mut FxState) -> Option<LibraryAction> {
                     continue;
                 }
                 let open = !q.is_empty() || st.open.contains(cat);
-                let head = ui.add(
-                    egui::Label::new(RichText::new(format!("{} {cat}", if open { "−" } else { "+" })).color(theme::TEXT_2))
-                        .sense(egui::Sense::click()),
-                );
+                let head = category_header(ui, cat, items.len(), open);
                 if head.clicked() && !st.open.remove(cat) {
                     st.open.insert(cat.to_string());
                 }
@@ -214,7 +241,7 @@ pub fn controls(ui: &mut Ui, history: &mut History, st: &mut FxState, clip: Clip
     ui.label(RichText::new(&c.name).font(theme::title()).color(theme::TEXT));
     if c.video.effects.is_empty() && c.transition_in.is_none() && c.transition_out.is_none() {
         ui.add_space(theme::SPACE_3);
-        ui.label(RichText::new("Double-click an effect in the library to apply it").color(theme::TEXT_3));
+        ui.label(RichText::new("Drag an effect from the library onto this clip, or double-click it").color(theme::TEXT_3));
     }
     // transitions
     for (head, tr) in [(true, &c.transition_in), (false, &c.transition_out)] {

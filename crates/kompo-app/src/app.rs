@@ -1374,7 +1374,9 @@ impl KompoApp {
                 let c = if target.is_some() { theme::ACCENT } else { theme::DANGER };
                 ui.painter().rect_stroke(viewer_rect.shrink(2.0), theme::RADIUS_MD, egui::Stroke::new(2.0, c), egui::StrokeKind::Inside);
             }
-            if let Some(payload) = drop.dnd_release_payload::<crate::effects_ui::EffectDrag>() {
+            if egui::DragAndDrop::has_payload_of_type::<crate::effects_ui::EffectDrag>(ui.ctx())
+                && let Some(payload) = drop.dnd_release_payload::<crate::effects_ui::EffectDrag>()
+            {
                 match target {
                     Some(clip) => {
                         let at = self.player.playhead();

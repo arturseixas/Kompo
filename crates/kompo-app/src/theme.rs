@@ -38,11 +38,11 @@ pub const ACCENT_DIM: Color32 = hexa(0xF2A43A, 56);
 pub const ACCENT_FAINT: Color32 = hexa(0xF2A43A, 26);
 
 // Data
-pub const CLIP_VIDEO: Color32 = hex(0x34363D);
-pub const CLIP_AUDIO: Color32 = hex(0x2B2D32);
-pub const CLIP_MOTION: Color32 = hex(0x3A3742);
-pub const CLIP_LABEL: Color32 = hex(0xC9C9CF);
-pub const WAVEFORM: Color32 = hex(0x8E8E97);
+pub const CLIP_VIDEO: Color32 = hex(0x3A5A8E);
+pub const CLIP_AUDIO: Color32 = hex(0x2C6A5C);
+pub const CLIP_MOTION: Color32 = hex(0x6A4E94);
+pub const CLIP_LABEL: Color32 = hex(0xF1F1F5);
+pub const WAVEFORM: Color32 = hex(0xA6D9C9);
 pub const KEYFRAME: Color32 = hex(0xC9C9CF);
 
 // Semantic
@@ -58,22 +58,22 @@ pub const SPACE_5: f32 = 16.0;
 pub const SPACE_6: f32 = 24.0;
 pub const SPACE_7: f32 = 32.0;
 
-pub const CONTROL_HEIGHT: f32 = 22.0;
-pub const ROW_HEIGHT: f32 = 24.0;
-pub const PAGE_BAR_HEIGHT: f32 = 28.0;
+pub const CONTROL_HEIGHT: f32 = 26.0;
+pub const ROW_HEIGHT: f32 = 28.0;
+pub const PAGE_BAR_HEIGHT: f32 = 34.0;
 pub const RULER_HEIGHT: f32 = 24.0;
-pub const TRACK_VIDEO_HEIGHT: f32 = 48.0;
-pub const TRACK_AUDIO_HEIGHT: f32 = 40.0;
+pub const TRACK_VIDEO_HEIGHT: f32 = 56.0;
+pub const TRACK_AUDIO_HEIGHT: f32 = 44.0;
 
-pub const RADIUS_SM: u8 = 2;
-pub const RADIUS_MD: u8 = 4;
+pub const RADIUS_SM: u8 = 3;
+pub const RADIUS_MD: u8 = 6;
 pub const STROKE: f32 = 1.0;
 pub const STROKE_FOCUS: f32 = 1.5;
 
 // Typography
-pub const SIZE_CAPTION: f32 = 11.0;
-pub const SIZE_BODY: f32 = 12.5;
-pub const SIZE_TITLE: f32 = 15.0;
+pub const SIZE_CAPTION: f32 = 11.5;
+pub const SIZE_BODY: f32 = 13.5;
+pub const SIZE_TITLE: f32 = 16.0;
 pub const SIZE_MONO: f32 = 12.0;
 pub const SIZE_TC: f32 = 18.0;
 

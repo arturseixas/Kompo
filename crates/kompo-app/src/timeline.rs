@@ -447,7 +447,10 @@ impl TimelineState {
             lane_clip.vline(x, row.y0..=row.y1, Stroke::new(2.0, theme::ACCENT));
             let _ = payload;
         }
-        if let Some(payload) = resp.dnd_release_payload::<MediaDrag>()
+        // NOTE: `dnd_release_payload::<T>` takes the payload even when it is not a `T`, so test the type first.
+        let carrying_media = egui::DragAndDrop::has_payload_of_type::<MediaDrag>(ui.ctx());
+        if carrying_media
+            && let Some(payload) = resp.dnd_release_payload::<MediaDrag>()
             && let Some(p) = pointer
             && let Some(row) = l.row_at(p.y)
         {
@@ -475,7 +478,8 @@ impl TimelineState {
             );
             lane_clip.rect_stroke(cr, theme::RADIUS_SM, Stroke::new(theme::STROKE_FOCUS, color), StrokeKind::Inside);
         }
-        if let Some(payload) = resp.dnd_release_payload::<crate::effects_ui::EffectDrag>()
+        if egui::DragAndDrop::has_payload_of_type::<crate::effects_ui::EffectDrag>(ui.ctx())
+            && let Some(payload) = resp.dnd_release_payload::<crate::effects_ui::EffectDrag>()
             && let Some(p) = pointer
         {
             match hit(&seq, &l, p) {
