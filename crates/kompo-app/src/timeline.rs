@@ -1174,19 +1174,7 @@ fn draw_filmstrip(p: &egui::Painter, r: Rect, c: &Clip, thumbs: &[kompo_engine::
         let t = c.source_in + local.mul_f64(c.speed);
         let Some(k) = kompo_engine::thumbs::nearest(thumbs, t) else { return };
         let th = &thumbs[k];
-        let id = egui::Id::new(("thumb", th.rgba.as_ptr() as usize));
-        let tex: egui::TextureHandle = match ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
-            Some(t) => t,
-            None => {
-                let t = ctx.load_texture(
-                    "thumb",
-                    egui::ColorImage::from_rgba_unmultiplied([th.width as usize, th.height as usize], &th.rgba),
-                    egui::TextureOptions::LINEAR,
-                );
-                ctx.data_mut(|d| d.insert_temp(id, t.clone()));
-                t
-            }
-        };
+        let tex = crate::widgets::thumb_texture(&ctx, th);
         let tile = Rect::from_min_size(Pos2::new(x, r.top() + 1.0), Vec2::new(tile_w, tile_h));
         pc.image(tex.id(), tile, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
     }

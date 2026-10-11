@@ -237,3 +237,18 @@ pub fn toolbar_sep(ui: &mut Ui) {
     ui.painter().rect_filled(r, 0.0, theme::LINE_STRONG);
     ui.add_space(theme::SPACE_2);
 }
+
+/// The egui texture for a generated thumbnail (uploaded once, then looked up by the pixel buffer's address).
+pub fn thumb_texture(ctx: &egui::Context, th: &kompo_engine::thumbs::Thumb) -> egui::TextureHandle {
+    let id = egui::Id::new(("thumb", th.rgba.as_ptr() as usize));
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let t = ctx.load_texture(
+        "thumb",
+        egui::ColorImage::from_rgba_unmultiplied([th.width as usize, th.height as usize], &th.rgba),
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
+}

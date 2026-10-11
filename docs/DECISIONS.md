@@ -359,3 +359,21 @@ Empacotamento: AppImage (linuxdeploy), `.app` + `.dmg` (dylibbundler, assinatura
 em `packaging/`, disparados por `.github/workflows/release.yml` em tags `v*`. As bibliotecas FFmpeg são distribuídas como
 bibliotecas dinâmicas LGPL (substituíveis pelo usuário); nenhum build de release usa libx264/libx265 (GPL) — o encoder de software
 H.264 só existe se o FFmpeg do sistema o tiver.
+
+## D21 — Inicialização no Windows: supervisor de backend gráfico
+
+O editor roda num processo filho e, se ele morre durante a partida (um driver gráfico que cai não deixa panic nem erro), o pai
+tenta o próximo backend: DX12, depois Vulkan, depois OpenGL. O backend que funcionou fica em `%LOCALAPPDATA%\Kompo\backend.txt`.
+Um filho que continua vivo após 10 s conta como iniciado. Se o editor cair depois, o pai mostra uma caixa de erro com o código
+de saída. `WGPU_BACKEND` ou `--no-supervisor` desligam o supervisor. A lógica é independente de plataforma e testada no Linux
+(`kompo-app/tests/supervisor.rs`). Log em arquivo: `%LOCALAPPDATA%\Kompo\kompo.log` (e `kompo.previous.log`).
+
+## D22 — Interface: ícones e estados claros (revisa a regra "texto primeiro" da fase 0)
+
+A regra "sem ícones decorativos" deixou a edição difícil de usar: a ferramenta ativa não se destacava e não havia botão de dividir.
+Agora a barra da timeline tem botões com ícone vetorial desenhado em código e estado ativo destacado (Select, Razor, Split,
+Delete, Snap, zoom), clips coloridos por tipo, miniaturas na mídia e uma tela inicial com botão de importar. Efeitos e transições
+são arrastáveis da biblioteca para um clip ou para o viewer. O painel de desempenho (F3) e o `kompo.log` mostram onde o tempo vai.
+
+Detalhe do egui que custou um bug: `DragAndDrop::take_payload::<T>` remove a carga **antes** de checar o tipo, então um
+`dnd_release_payload::<A>()` apaga uma carga do tipo `B`. Cada alvo de soltura confere `has_payload_of_type` primeiro.

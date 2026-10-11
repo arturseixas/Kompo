@@ -41,7 +41,7 @@ fn fmt_dur(t: Time) -> String {
 fn detail(m: &MediaAsset) -> String {
     match &m.info.video {
         Some(v) if m.info.kind == kompo_engine::kompo_core::MediaKind::Image => format!("{}×{} · {}", v.width, v.height, v.codec),
-        Some(v) => format!("{}×{} · {} · {:.3} fps · {}", v.width, v.height, v.codec, v.frame_rate.as_f64(), fmt_dur(m.info.duration)),
+        Some(v) => format!("{}×{} · {} · {}", v.width, v.height, v.codec, fmt_dur(m.info.duration)),
         None => {
             let a = m.info.audio.first();
             format!(
@@ -61,6 +61,7 @@ pub fn show(
     offline: &HashSet<MediaId>,
     audio: &AudioCache,
     proxy_progress: &dyn Fn(MediaId) -> Option<f32>,
+    thumbs: &dyn Fn(&MediaAsset) -> Option<std::sync::Arc<Vec<kompo_engine::thumbs::Thumb>>>,
 ) -> Option<PoolAction> {
     let mut action = None;
     ui.add_space(theme::SPACE_3);
@@ -76,12 +77,22 @@ pub fn show(
     for m in media {
         let id = egui::Id::new(("pool", m.id));
         let selected = state.selection.contains(&m.id);
-        let size = Vec2::new(ui.available_width(), theme::ROW_HEIGHT * 1.6);
+        let size = Vec2::new(ui.available_width(), ITEM_HEIGHT);
         let payload = MediaDrag(if selected { state.selection.clone() } else { vec![m.id] });
         let resp = ui
             .dnd_drag_source(id, payload, |ui| {
                 let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-                draw_item(ui, rect, m, selected, resp.hovered(), offline.contains(&m.id), audio, proxy_progress(m.id));
+                draw_item(
+                    ui,
+                    rect,
+                    m,
+                    selected,
+                    resp.hovered(),
+                    offline.contains(&m.id),
+                    audio,
+                    proxy_progress(m.id),
+                    thumbs(m).as_deref().map(Vec::as_slice),
+                );
                 resp
             })
             .inner;
@@ -170,14 +181,38 @@ pub fn show(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_item(ui: &Ui, rect: Rect, m: &MediaAsset, selected: bool, hovered: bool, offline: bool, audio: &AudioCache, proxy: Option<f32>) {
+const ITEM_HEIGHT: f32 = 56.0;
+
+#[allow(clippy::too_many_arguments)]
+fn draw_item(
+    ui: &Ui,
+    rect: Rect,
+    m: &MediaAsset,
+    selected: bool,
+    hovered: bool,
+    offline: bool,
+    audio: &AudioCache,
+    proxy: Option<f32>,
+    thumbs: Option<&[kompo_engine::thumbs::Thumb]>,
+) {
     if selected {
         ui.painter().rect_filled(rect, theme::RADIUS_SM, theme::ACCENT_DIM);
     } else if hovered {
         ui.painter().rect_filled(rect, theme::RADIUS_SM, theme::BG_HOVER);
     }
     let color = if offline { theme::DANGER } else { theme::TEXT };
-    widgets::label_at(ui, rect.left_center() + Vec2::new(theme::SPACE_2, -7.0), &m.name, theme::body(), color);
+    // thumbnail (16:9) on the left; audio-only media gets a plain tile
+    let tile = Rect::from_min_size(
+        rect.left_top() + Vec2::new(theme::SPACE_2, 6.0),
+        Vec2::new((rect.height() - 12.0) * 16.0 / 9.0, rect.height() - 12.0),
+    );
+    ui.painter().rect_filled(tile, theme::RADIUS_SM, if m.info.video.is_some() { theme::BG_BASE } else { theme::CLIP_AUDIO });
+    if let Some(th) = thumbs.and_then(|t| t.first()) {
+        let tex = widgets::thumb_texture(ui.ctx(), th);
+        ui.painter().image(tex.id(), tile, Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+    }
+    let text_x = tile.right() + theme::SPACE_3;
+    widgets::label_at(ui, egui::pos2(text_x, rect.center().y - 9.0), &m.name, theme::body(), color);
     let mut d = detail(m);
     if offline {
         d = "offline — right-click to relink".into();
@@ -189,5 +224,5 @@ fn draw_item(ui: &Ui, rect: Rect, m: &MediaAsset, selected: bool, hovered: bool,
     } else if m.proxy.is_some() && !offline {
         d.push_str(" · proxy");
     }
-    widgets::label_at(ui, rect.left_center() + Vec2::new(theme::SPACE_2, 8.0), &d, theme::caption(), theme::TEXT_3);
+    widgets::label_at(ui, egui::pos2(text_x, rect.center().y + 9.0), &d, theme::caption(), theme::TEXT_3);
 }

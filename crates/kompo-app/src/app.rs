@@ -1328,9 +1328,15 @@ impl KompoApp {
             let action = egui::ScrollArea::vertical()
                 .id_salt("pool")
                 .show(&mut child, |ui| {
-                    media_pool::show(ui, &mut self.pool, self.history.project(), &self.offline, &self.player.audio_cache, &|id| {
-                        self.proxies.progress(id)
-                    })
+                    media_pool::show(
+                        ui,
+                        &mut self.pool,
+                        self.history.project(),
+                        &self.offline,
+                        &self.player.audio_cache,
+                        &|id| self.proxies.progress(id),
+                        &|asset| self.thumbs.get(asset),
+                    )
                 })
                 .inner;
             if let Some(a) = action {
@@ -1398,13 +1404,17 @@ impl KompoApp {
             crate::color_ui::viewer_overlay(ui, shown.image, &mut self.history, &self.color, clip, self.player.playhead());
         }
         if !has_media && !matches!(self.page, Page::Audio | Page::Motion) {
-            ui.painter().text(
-                viewer_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Drop media here or press Ctrl+I to import",
-                theme::body(),
-                theme::TEXT_3,
-            );
+            let card = Rect::from_center_size(viewer_rect.center(), Vec2::new(420.0, 170.0));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card).layout(egui::Layout::top_down(egui::Align::Center)));
+            child.label(RichText::new("Start a new edit").font(theme::title()).color(theme::TEXT));
+            child.add_space(theme::SPACE_2);
+            child.label(RichText::new("Import video, audio or images, or drop files anywhere in this window.").color(theme::TEXT_3));
+            child.add_space(theme::SPACE_5);
+            if widgets::primary_button(&mut child, "Import Media…").clicked() {
+                self.import_dialog();
+            }
+            child.add_space(theme::SPACE_3);
+            child.label(RichText::new("Ctrl+I").font(theme::caption()).color(theme::TEXT_3));
         }
         // click an angle in the multicam grid to cut to it
         if let Some((grid, n)) = shown.multicam_grid {
