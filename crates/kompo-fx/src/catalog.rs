@@ -169,7 +169,7 @@ pub fn categories() -> Vec<&'static str> {
 }
 
 pub fn find(id: &str) -> Option<&'static FxInfo> {
-    catalog().iter().find(|e| e.id == id)
+    catalog().iter().find(|e| e.id == id).or_else(|| crate::ofx::find(id))
 }
 
 /// Library spec for a catalog id (`ec.xxx`).

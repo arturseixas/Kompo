@@ -149,3 +149,22 @@ fn composition_clip_renders_motion_layers() {
     assert!(c[0] > 150 && c[1] < 60, "red dot in the middle: {c:?}");
     assert!(px(&img, 3, 3)[0] < 20, "background untouched");
 }
+
+#[test]
+fn ofx_plugin_runs_inside_a_clip() {
+    // needs the OpenFX examples: scripts/build-ofx-examples.sh, then KOMPO_OFX_TEST_DIR=<dir>
+    let Some(dir) = std::env::var_os("KOMPO_OFX_TEST_DIR") else {
+        eprintln!("KOMPO_OFX_TEST_DIR not set; skipping");
+        return;
+    };
+    let n = kompo_fx::ofx::scan(&[dir.into()]);
+    assert!(n >= 5, "plug-ins in the catalog: {n}");
+    let mut c = solid("c", [0.8, 0.8, 0.8, 1.0], 0.0, 2.0);
+    let mut fx = kompo_fx::new_instance("ofx:uk.co.thefoundry.BasicGainPlugin", [64.0, 36.0]).expect("gain plug-in in the catalog");
+    fx.params.insert("scale".into(), kompo_core::animation::AnimatedParam::float(0.5));
+    c.video.effects.push(fx);
+    let p = project_with(vec![c]);
+    let plain = project_with(vec![solid("c", [0.8, 0.8, 0.8, 1.0], 0.0, 2.0)]);
+    let (a, b) = (px(&render(&plain, 1.0), 10, 10)[0], px(&render(&p, 1.0), 10, 10)[0]);
+    assert!(b < a - 20, "the OFX gain darkened the clip: {a} -> {b}");
+}

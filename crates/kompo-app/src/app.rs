@@ -108,6 +108,11 @@ impl KompoApp {
             _ => None,
         };
         let mut app = Self::with_renderer(renderer, launch.clone());
+        // OpenFX plug-ins are discovered in the background: loading their binaries can be slow
+        std::thread::spawn(|| {
+            let n = kompo_engine::kompo_fx::ofx::scan(&[]);
+            log::info!("OpenFX: {n} usable plug-ins");
+        });
         app.export = crate::export_ui::ExportUi::new(gpu);
         app.render_state = cc.wgpu_render_state.clone();
         app

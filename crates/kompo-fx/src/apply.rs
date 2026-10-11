@@ -60,6 +60,7 @@ pub fn apply_one(node: NodeRef, fx: &EffectInstance, ctx: &FxContext) -> NodeRef
             };
             if p.is_identity() { node } else { Node::lut(node, Arc::new(p.bake())) }
         }
+        id if id.starts_with(kompo_core::effects::OFX_PREFIX) => crate::ofx::apply(node, fx, ctx),
         id if id.starts_with("ec.") => match library_spec(id) {
             Some(spec) => {
                 let params = lib_params(spec, fx, ctx);

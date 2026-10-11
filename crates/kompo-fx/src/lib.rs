@@ -16,6 +16,7 @@ pub mod apply;
 pub mod catalog;
 pub mod grade;
 pub mod ocio;
+pub mod ofx;
 pub mod transition;
 
 pub use apply::{FxContext, apply_effects};

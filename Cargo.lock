@@ -2322,6 +2322,7 @@ dependencies = [
  "kompo-color",
  "kompo-core",
  "kompo-gpu",
+ "kompo-ofx",
  "log",
  "parking_lot",
  "rayon",
@@ -2392,6 +2393,7 @@ dependencies = [
 name = "kompo-ofx"
 version = "0.1.0"
 dependencies = [
+ "kompo-core",
  "libloading 0.9.0",
  "log",
  "parking_lot",

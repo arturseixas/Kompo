@@ -13,6 +13,7 @@ workspace = true
 kompo-core.workspace = true
 kompo-gpu.workspace = true
 kompo-color.workspace = true
+kompo-ofx.workspace = true
 effectcraft-effects.workspace = true
 effectcraft-keyframe.workspace = true
 effectcraft-raster.workspace = true

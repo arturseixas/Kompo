@@ -15,3 +15,4 @@ thiserror.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 rayon.workspace = true
+kompo-core.workspace = true
