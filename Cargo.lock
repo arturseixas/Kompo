@@ -1628,6 +1628,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "filmcraft-color"
+version = "0.6.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "filmcraft-scopes"
+version = "0.6.0"
+dependencies = [
+ "filmcraft-color",
+ "serde",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2196,6 +2211,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "env_logger",
+ "filmcraft-scopes",
  "image",
  "kompo-core",
  "kompo-engine",
@@ -2291,6 +2307,7 @@ dependencies = [
  "kompo-core",
  "kompo-gpu",
  "log",
+ "parking_lot",
  "rayon",
  "serde",
  "serde_json",

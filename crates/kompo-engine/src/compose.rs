@@ -282,6 +282,7 @@ fn clip_layer(
         comp_time: t.seconds(),
         layer_time: lt,
     };
+    node = kompo_fx::grade::apply_grade(node, &clip.video.grade, lt);
     node = kompo_fx::apply_effects(node, &clip.video.effects, &fx_ctx);
     if let Some(fx) = modifier.and_then(|m| m.effect.as_ref()) {
         node = kompo_fx::apply::apply_one(node, fx, &fx_ctx);

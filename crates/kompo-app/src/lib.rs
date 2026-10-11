@@ -2,6 +2,7 @@
 //! headless by the UI benchmark and tests.
 
 pub mod app;
+pub mod color_ui;
 pub mod effects_ui;
 pub mod export_ui;
 pub mod inspector;
@@ -27,6 +28,7 @@ pub fn parse_args() -> Launch {
             "--seek" => l.seek = args.next().and_then(|v| v.parse().ok()),
             "--select-first" => l.select_first = true,
             "--multicam" => l.multicam = true,
+            "--demo-grade" => l.demo_grade = true,
             "--add-fx" => l.add_fx.extend(args.next()),
             "--add-transition" => l.add_transition = args.next(),
             "--help" | "-h" => {

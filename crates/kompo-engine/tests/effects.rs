@@ -96,3 +96,33 @@ fn library_effect_runs_on_the_cpu() {
     assert_eq!(img.len(), 64 * 36 * 4);
     assert!(px(&img, 10, 10)[2] > 100, "image survived the effect: {:?}", px(&img, 10, 10));
 }
+
+#[test]
+fn tracker_follows_a_moving_bar() {
+    use kompo_media::testmedia::{self, TestClipSpec};
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    let dir = std::env::temp_dir().join("kompo-fx-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("track.mp4");
+    if !path.exists() {
+        testmedia::generate(&path, &TestClipSpec::h264(640, 360, 30)).unwrap();
+    }
+    let mut p = Project::new("track");
+    let asset = kompo_engine::import::probe_asset(&path).unwrap();
+    let id = p.add_media(asset);
+    kompo_engine::import::match_sequence_to(&mut p, id);
+    kompo_engine::import::append_to_sequence(&mut p, id);
+    let clip = p.active().video_tracks[0].clips[0].id;
+    // the test pattern's bar sits at x = 7 n (mod width), 4 px wide, in the middle band
+    let n0 = 3;
+    let c0 = [(7.0 * n0 as f64 + 2.0) / 640.0, 0.5];
+    let rate = p.active().format.frame_rate;
+    let from = Time::from_frames(n0, rate);
+    let to = Time::from_frames(n0 + 12, rate);
+    let r = kompo_engine::tracking::track_region(&p, clip, c0, [0.08, 0.2], from, to, &AtomicBool::new(false), &AtomicU64::new(0)).unwrap();
+    assert_eq!(r.len(), 13);
+    for (i, (_, c)) in r.iter().enumerate() {
+        let expect = (7.0 * (n0 + i as i64) as f64 + 2.0) / 640.0;
+        assert!((c[0] - expect).abs() < 0.012, "frame {i}: tracked {:.4}, expected {:.4}", c[0], expect);
+    }
+}

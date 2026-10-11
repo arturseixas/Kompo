@@ -368,6 +368,26 @@ impl Player {
         node
     }
 
+    /// The current picture at `w x h` as display-encoded RGBA8 (scopes). Does
+    /// not touch playback statistics.
+    pub fn scope_frame(&mut self, w: u32, h: u32) -> Option<Vec<u8>> {
+        let seq = self.sequence().clone();
+        let opts = ComposeOptions { width: w, height: h, working: self.project.settings.working_space };
+        let mut frames = Frames {
+            servers: &mut self.servers,
+            stills: &mut self.stills,
+            playing: self.playing,
+            opts: &self.decoder_options,
+            blocking: None,
+            late: 0,
+            missing: 0,
+        };
+        let node = compose(&self.project, &seq, self.playhead, &opts, &mut frames);
+        let spec =
+            kompo_gpu::graph::OutputSpec { dither: false, ..kompo_gpu::graph::OutputSpec::display(self.project.settings.working_space) };
+        self.renderer.render_rgba8(&node, &spec).ok()
+    }
+
     /// Like [`compose`](Self::compose) but waits for exact frames (export, tests).
     pub fn compose_exact(&mut self, t: Time, width: u32, height: u32, timeout: Duration) -> NodeRef {
         let seq = self.sequence().clone();

@@ -37,10 +37,17 @@ pub struct Viewer {
 }
 
 /// What the viewer drew this frame.
-#[derive(Default)]
 pub struct Shown {
     /// The image rect and the angle count when the multicam grid is shown.
     pub multicam_grid: Option<(Rect, usize)>,
+    /// Where the picture is drawn.
+    pub image: Rect,
+}
+
+impl Default for Shown {
+    fn default() -> Self {
+        Self { multicam_grid: None, image: Rect::NOTHING }
+    }
 }
 
 impl Viewer {
@@ -114,6 +121,7 @@ impl Viewer {
         ui.painter().rect_filled(rect, 0.0, theme::BG_BASE);
         let fmt = player.sequence().format.clone();
         let (w, h, shown) = self.frame_size(rect, ui.ctx().pixels_per_point(), fmt.width, fmt.height);
+        out.image = shown;
         let key = RenderKey { playhead: player.playhead(), revision, size: (w, h) };
         let need = player.is_playing() || self.last != Some(key) || player.is_waiting_for_frames();
         let spec = OutputSpec::display(player.project().settings.working_space);

@@ -14,6 +14,7 @@ pub mod frames;
 pub mod import;
 pub mod player;
 pub mod project_io;
+pub mod tracking;
 
 pub use player::{Player, PlayerStats};
 

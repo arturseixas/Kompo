@@ -5,7 +5,7 @@ use crate::theme;
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use kompo_engine::kompo_core::animation::{AnimatedParam, Handle, Interp, ParamValue};
 use kompo_engine::kompo_core::history::History;
-use kompo_engine::kompo_core::id::{ClipId, EffectId};
+use kompo_engine::kompo_core::id::{ClipId, EffectId, NodeId};
 use kompo_engine::kompo_core::project::Project;
 use kompo_engine::kompo_core::time::Time;
 use kompo_engine::kompo_fx::FxUi;
@@ -13,8 +13,19 @@ use kompo_engine::kompo_fx::FxUi;
 /// Address of an animatable parameter in the project.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParamPath {
-    Effect { clip: ClipId, fx: EffectId, name: String },
+    Effect {
+        clip: ClipId,
+        fx: EffectId,
+        name: String,
+    },
     Opacity(ClipId),
+    /// `prop`: 0 center, 1 size, 2 rotation of a power window.
+    Window {
+        clip: ClipId,
+        node: NodeId,
+        idx: usize,
+        prop: u8,
+    },
 }
 
 impl ParamPath {
@@ -22,13 +33,23 @@ impl ParamPath {
         match self {
             ParamPath::Effect { clip, fx, name } => p.active().clip(*clip)?.video.effects.iter().find(|e| e.id == *fx)?.params.get(name),
             ParamPath::Opacity(clip) => Some(&p.active().clip(*clip)?.video.opacity),
+            ParamPath::Window { clip, node, idx, prop } => {
+                let w = p.active().clip(*clip)?.video.grade.nodes.iter().find(|n| n.id == *node)?.windows.get(*idx)?;
+                Some(match prop {
+                    0 => &w.center,
+                    1 => &w.size,
+                    _ => &w.rotation,
+                })
+            }
         }
     }
 
     /// Start of the object owning the parameter (keyframe times are relative to it).
     pub fn owner_start(&self, p: &Project) -> Option<Time> {
         match self {
-            ParamPath::Effect { clip, .. } | ParamPath::Opacity(clip) => Some(p.active().clip(*clip)?.start),
+            ParamPath::Effect { clip, .. } | ParamPath::Opacity(clip) | ParamPath::Window { clip, .. } => {
+                Some(p.active().clip(*clip)?.start)
+            }
         }
     }
 
@@ -38,6 +59,14 @@ impl ParamPath {
                 p.active_mut().clip_mut(*clip)?.video.effects.iter_mut().find(|e| e.id == *fx)?.params.get_mut(name)
             }
             ParamPath::Opacity(clip) => Some(&mut p.active_mut().clip_mut(*clip)?.video.opacity),
+            ParamPath::Window { clip, node, idx, prop } => {
+                let w = p.active_mut().clip_mut(*clip)?.video.grade.nodes.iter_mut().find(|n| n.id == *node)?.windows.get_mut(*idx)?;
+                Some(match prop {
+                    0 => &mut w.center,
+                    1 => &mut w.size,
+                    _ => &mut w.rotation,
+                })
+            }
         }
     }
 }

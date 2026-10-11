@@ -62,6 +62,8 @@ pub struct Launch {
     pub multicam: bool,
     /// Effects to add to the first video clip (demo/testing): catalog ids.
     pub add_fx: Vec<String>,
+    /// Applies a teal-and-orange look with a window to the first video clip (demo/testing).
+    pub demo_grade: bool,
     /// Transition kind to add at the head of the first video clip (demo/testing).
     pub add_transition: Option<String>,
 }
@@ -88,6 +90,7 @@ pub struct KompoApp {
     last_autosave: Instant,
     pub export: crate::export_ui::ExportUi,
     pub fx: crate::effects_ui::FxState,
+    pub color: crate::color_ui::ColorState,
 }
 
 impl KompoApp {
@@ -127,6 +130,7 @@ impl KompoApp {
             last_autosave: Instant::now(),
             export: crate::export_ui::ExportUi::new(None),
             fx: Default::default(),
+            color: Default::default(),
             launch: launch.clone(),
         };
         if launch.multicam && launch.files.len() >= 2 {
@@ -161,6 +165,25 @@ impl KompoApp {
         if let Some((clip, start)) = first {
             for fx in &launch.add_fx {
                 crate::effects_ui::add_effect(&mut app.history, clip, fx, start);
+            }
+            if launch.demo_grade {
+                use kompo_engine::kompo_core::color::{GradeNode, PowerWindow, WheelValue};
+                let mut n = GradeNode::new("Look");
+                n.primaries.lift = WheelValue { r: -0.02, g: 0.0, b: 0.03, master: 0.0 };
+                n.primaries.gain = WheelValue { r: 1.12, g: 1.0, b: 0.86, master: 1.05 };
+                n.primaries.contrast = 1.15;
+                n.primaries.pivot = kompo_engine::kompo_color::grade::grey_pivot();
+                n.primaries.saturation = 1.2;
+                let mut w = GradeNode::new("Sky");
+                w.windows.push(PowerWindow::default());
+                w.primaries.saturation = 1.5;
+                app.history.edit("Demo grade", move |p| {
+                    if let Some(c) = p.active_mut().clip_mut(clip) {
+                        c.video.grade.nodes = vec![n, w];
+                    }
+                });
+                app.color.tab = crate::color_ui::Tab::Secondary;
+                app.color.node = 1;
             }
             if let Some(t) = &launch.add_transition {
                 crate::effects_ui::add_transition(&mut app.history, clip, t, start);
@@ -1018,15 +1041,17 @@ impl KompoApp {
         let pool_w = match self.page {
             Page::Cut if has_media => 250.0,
             Page::Effects => 270.0,
+            Page::Color => 320.0,
             _ => 0.0,
         };
         let has_sel = match self.page {
             Page::Cut => !self.timeline.selection.is_empty(),
-            Page::Effects => target.is_some(),
+            Page::Effects | Page::Color => target.is_some(),
             _ => false,
         };
         let insp_w = match self.page {
             Page::Effects if has_sel => 340.0,
+            Page::Color if has_sel => 380.0,
             _ if has_sel => 290.0,
             _ => 0.0,
         };
@@ -1058,6 +1083,16 @@ impl KompoApp {
                 self.sync_player();
             }
             widgets::vline(ui, pool_rect.right(), pool_rect.top(), pool_rect.bottom());
+        } else if pool_w > 0.0 && self.page == Page::Color {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(pool_rect.shrink2(Vec2::new(theme::SPACE_3, 0.0))));
+            let rev = self.history.revision();
+            crate::color_ui::update_scopes(ui.ctx(), &mut self.color, &mut self.player, rev);
+            crate::color_ui::poll_tracker(ui.ctx(), &mut self.history, &mut self.color);
+            crate::color_ui::scopes_panel(&mut child, &mut self.color);
+            if let Some(clip) = target {
+                crate::color_ui::nodes_panel(&mut child, &mut self.history, &mut self.color, clip);
+            }
+            widgets::vline(ui, pool_rect.right(), pool_rect.top(), pool_rect.bottom());
         } else if pool_w > 0.0 {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(pool_rect.shrink2(Vec2::new(theme::SPACE_3, 0.0))));
             let action = egui::ScrollArea::vertical()
@@ -1077,6 +1112,7 @@ impl KompoApp {
             let playhead = self.player.playhead();
             egui::ScrollArea::vertical().id_salt("inspector").show(&mut child, |ui| match (self.page, target) {
                 (Page::Effects, Some(clip)) => crate::effects_ui::controls(ui, &mut self.history, &mut self.fx, clip, playhead),
+                (Page::Color, Some(clip)) => crate::color_ui::controls(ui, &mut self.history, &mut self.color, clip, playhead),
                 _ => inspector::show(ui, &mut self.history, &self.timeline.selection, playhead),
             });
             if self.history.revision() != before {
@@ -1087,6 +1123,11 @@ impl KompoApp {
         let rs = self.render_state.clone();
         let rev = self.history.revision();
         let shown = self.viewer.show(ui, viewer_rect, &mut self.player, rs.as_ref(), rev);
+        if self.page == Page::Color
+            && let Some(clip) = target
+        {
+            crate::color_ui::viewer_overlay(ui, shown.image, &mut self.history, &self.color, clip, self.player.playhead());
+        }
         if !has_media {
             ui.painter().text(
                 viewer_rect.center(),
@@ -1243,6 +1284,7 @@ impl KompoApp {
         }
         self.export.queue_window(ui);
         crate::params_ui::graph_window(ui.ctx(), &mut self.history, &mut self.fx.graph, self.player.playhead());
+        crate::params_ui::graph_window(ui.ctx(), &mut self.history, &mut self.color.graph, self.player.playhead());
         self.close_guard(ui);
         self.autosave();
     }

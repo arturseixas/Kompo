@@ -6,6 +6,8 @@
 //! of the grading operators (the GPU versions in `kompo-gpu` are tested
 //! against these).
 
+pub mod grade;
+pub mod lut;
 pub mod primaries;
 pub mod transfer;
 pub mod ycbcr;

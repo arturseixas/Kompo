@@ -53,7 +53,7 @@ impl Default for Primaries {
             gain: WheelValue::splat(1.0),
             offset: WheelValue::splat(0.0),
             contrast: 1.0,
-            pivot: 0.435,
+            pivot: 0.336,
             saturation: 1.0,
             temperature: 0.0,
             tint: 0.0,
@@ -212,6 +212,27 @@ pub struct LutRef {
     pub path: PathBuf,
     /// Mix between the input and the LUT result (0..1).
     pub strength: f64,
+    /// The LUT expects DaVinci-Intermediate log input instead of Rec.709-encoded video.
+    #[serde(default)]
+    pub input_log: bool,
+}
+
+/// Where an OCIO transform leads.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum OcioTarget {
+    /// Another color space of the config.
+    Space(String),
+    /// A display and view (display-referred output).
+    Display { display: String, view: String },
+}
+
+/// An OpenColorIO transform applied at the head of a node: values are taken
+/// as being in `source` and converted to `target`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OcioRef {
+    pub config: PathBuf,
+    pub source: String,
+    pub target: OcioTarget,
 }
 
 /// One correction node. Nodes run in series; a node limited by a qualifier
@@ -224,6 +245,8 @@ pub struct GradeNode {
     pub primaries: Primaries,
     pub curves: Curves,
     pub lut: Option<LutRef>,
+    #[serde(default)]
+    pub ocio: Option<OcioRef>,
     pub qualifier: Qualifier,
     pub windows: Vec<PowerWindow>,
     /// Inverts the combined matte (qualifier x windows).
@@ -239,6 +262,7 @@ impl GradeNode {
             primaries: Primaries::default(),
             curves: Curves::default(),
             lut: None,
+            ocio: None,
             qualifier: Qualifier::default(),
             windows: Vec::new(),
             invert_matte: false,
@@ -246,7 +270,7 @@ impl GradeNode {
     }
 
     pub fn is_identity(&self) -> bool {
-        !self.enabled || (self.primaries.is_identity() && self.curves.is_identity() && self.lut.is_none())
+        !self.enabled || (self.primaries.is_identity() && self.curves.is_identity() && self.lut.is_none() && self.ocio.is_none())
     }
 
     pub fn has_matte(&self) -> bool {
