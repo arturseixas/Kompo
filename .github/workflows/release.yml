@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config clang libclang-dev ffmpeg libfuse2 \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev \
+            libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: packaging/build-appimage.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: appimage, path: Kompo-x86_64.AppImage }
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install ffmpeg pkgconf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: packaging/build-dmg.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: dmg, path: target/Kompo.dmg }
+
+  windows:
+    runs-on: windows-2022
+    env:
+      FFMPEG_DIR: ${{ github.workspace }}\ffmpeg
+    steps:
+      - uses: actions/checkout@v4
+      - name: FFmpeg (LGPL shared build)
+        shell: pwsh
+        run: |
+          $base = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
+          try { Invoke-WebRequest "$base/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip" -OutFile ffmpeg.zip }
+          catch { Invoke-WebRequest "$base/ffmpeg-master-latest-win64-lgpl-shared.zip" -OutFile ffmpeg.zip }
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-tmp
+          Move-Item (Get-ChildItem ffmpeg-tmp)[0].FullName ffmpeg
+          "$env:GITHUB_WORKSPACE\ffmpeg\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: dotnet tool install --global wix
+      - run: ./packaging/build-msi.ps1
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with: { name: msi, path: target/Kompo.msi }
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+      - uses: softprops/action-gh-release@v2
+        with: { files: "**/*" , generate_release_notes: true }

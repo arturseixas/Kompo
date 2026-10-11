@@ -120,6 +120,7 @@ pub struct TimelineEnv<'a> {
     pub playhead: Time,
     pub playing: bool,
     pub waveforms: &'a dyn Fn(MediaId, usize) -> Option<Arc<ConformedAudio>>,
+    pub thumbs: &'a dyn Fn(MediaId) -> Option<Arc<Vec<kompo_engine::thumbs::Thumb>>>,
     pub offline: &'a HashSet<MediaId>,
 }
 
@@ -539,6 +540,16 @@ impl TimelineState {
         }
         p.rect_filled(r, theme::RADIUS_SM, fill);
         let offline = c.source.media_id().is_some_and(|m| env.offline.contains(&m) || env.history.project().media(m).is_none());
+        // filmstrip
+        if video
+            && r.height() >= 30.0
+            && r.width() > 24.0
+            && let ClipSource::Media { media, .. } = &c.source
+            && !offline
+            && let Some(th) = (env.thumbs)(*media)
+        {
+            draw_filmstrip(p, r, c, &th, selected);
+        }
         // waveform
         if !video
             && r.width() > 4.0
@@ -1102,4 +1113,46 @@ fn draw_waveform(p: &egui::Painter, r: Rect, c: &Clip, w: &ConformedAudio, seq: 
         mesh.add_colored_rect(rr, theme::WAVEFORM);
     }
     p.add(Shape::mesh(mesh));
+}
+
+/// Tiles the clip with thumbnails of the source at the matching times.
+fn draw_filmstrip(p: &egui::Painter, r: Rect, c: &Clip, thumbs: &[kompo_engine::thumbs::Thumb], selected: bool) {
+    let Some(first) = thumbs.first() else { return };
+    let ctx = p.ctx().clone();
+    let tile_h = r.height() - 2.0;
+    let tile_w = (tile_h * first.width as f32 / first.height as f32).max(8.0);
+    let visible = r.intersect(p.clip_rect());
+    if visible.width() <= 0.0 {
+        return;
+    }
+    let pc = p.with_clip_rect(visible.intersect(r.shrink(1.0)));
+    let first_i = ((visible.left() - r.left()) / tile_w).floor().max(0.0) as usize;
+    let tint = Color32::from_white_alpha(if selected { 200 } else { 150 });
+    let span = c.duration.seconds().max(1e-6);
+    for i in first_i.. {
+        let x = r.left() + i as f32 * tile_w;
+        if x >= visible.right() {
+            break;
+        }
+        let centre = ((x + tile_w * 0.5 - r.left()) / r.width()).clamp(0.0, 1.0) as f64;
+        let local = Time::from_seconds(span * if c.reverse { 1.0 - centre } else { centre });
+        let t = c.source_in + local.mul_f64(c.speed);
+        let Some(k) = kompo_engine::thumbs::nearest(thumbs, t) else { return };
+        let th = &thumbs[k];
+        let id = egui::Id::new(("thumb", th.rgba.as_ptr() as usize));
+        let tex: egui::TextureHandle = match ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+            Some(t) => t,
+            None => {
+                let t = ctx.load_texture(
+                    "thumb",
+                    egui::ColorImage::from_rgba_unmultiplied([th.width as usize, th.height as usize], &th.rgba),
+                    egui::TextureOptions::LINEAR,
+                );
+                ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+                t
+            }
+        };
+        let tile = Rect::from_min_size(Pos2::new(x, r.top() + 1.0), Vec2::new(tile_w, tile_h));
+        pc.image(tex.id(), tile, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+    }
 }

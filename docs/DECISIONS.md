@@ -326,3 +326,36 @@ registra origem e licença. A integração fica em crates nossos (`kompo-fx` par
 cor por LUT 3D) rodam na GPU e são o caminho de tempo real.
 
 **Custo:** efeitos da biblioteca exigem leitura da GPU para a CPU e de volta (documentado em PERFORMANCE.md).
+
+## D17 — Motion: expressões e composições
+
+Propriedades de camada são endereçadas por nomes pontilhados (`transform.position`, `shape.0.fill.color`…) gerados por macro,
+o que dá à UI, aos keyframes e às expressões o mesmo endereço. Expressões usam uma linguagem própria pequena (parser de
+Pratt: `time`, `value`, `wiggle`, `loopOut`, `linear`, `ease`, `thisComp.layer("x").prop`) em vez de embutir JavaScript —
+sem dependência, determinística, avaliada por quadro. Formas e texto são rasterizados com `effectcraft-path`/`effectcraft-text`
+(máscaras de cobertura) em imagens do canvas; pré-composições são recursivas e entram na timeline como `ClipSource::Composition`.
+
+## D18 — DSP de áudio e medição
+
+Os efeitos de áudio são slots de estado (`StripState`) por faixa/clipe/master: denoise, EQ paramétrico, compressor e os efeitos
+`audio.*` de `filmcraft-audio-dsp`. Mudanças de parâmetro são suavizadas no processamento; a latência de cada slot é compensada
+lendo os clipes `latency` amostras adiante (com priming após seek). Loudness EBU R128 (momentâneo, curto prazo, integrado, LRA, true
+peak) é medido no thread de áudio e lido por átomos; `measure` faz a mesma medição offline.
+
+## D19 — Host OFX
+
+Implementação própria da especificação OpenFX 1.4 (BSD-3 na especificação; nenhum código de plug-in é incluído). Suítes são
+`static` `repr(C)`; handles são caixas vazadas. As funções variádicas `paramGetValue/SetValue` não podem ser definidas em Rust
+estável, então espelhamos a convenção de chamada por ABI (`cfg`). Plug-ins que exigem GPU (OpenGL/CUDA/Metal) não carregam —
+limite documentado em `docs/OFX.md`.
+
+## D20 — Proxies, cache e empacotamento
+
+Proxies são H.264 all-intra (qualquer decoder, acesso aleatório quadro a quadro), 1/2, 1/4 ou 1/8 da resolução, num diretório de
+cache por usuário; o caminho é derivado de (caminho, tamanho, mtime, divisor), então trocar o arquivo invalida o proxy. O projeto
+guarda só `MediaAsset.proxy` e a preferência `use_proxies`; a exportação ignora proxies.
+
+Empacotamento: AppImage (linuxdeploy), `.app` + `.dmg` (dylibbundler, assinatura ad-hoc por padrão) e `.msi` (WiX v4) por scripts
+em `packaging/`, disparados por `.github/workflows/release.yml` em tags `v*`. As bibliotecas FFmpeg são distribuídas como
+bibliotecas dinâmicas LGPL (substituíveis pelo usuário); nenhum build de release usa libx264/libx265 (GPL) — o encoder de software
+H.264 só existe se o FFmpeg do sistema o tiver.

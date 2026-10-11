@@ -35,10 +35,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: OpenFX example plug-ins (host conformance tests)
+        run: scripts/build-ofx-examples.sh
       - name: Tests (GPU tests run on Mesa lavapipe)
         run: cargo test --workspace
         env:
           WGPU_BACKEND: vulkan
+          KOMPO_OFX_TEST_DIR: ${{ github.workspace }}/target/ofx-examples
 
   macos:
     name: macOS (build + tests on Metal)

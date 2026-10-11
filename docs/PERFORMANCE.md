@@ -100,6 +100,34 @@ O arquivo de 500 clipes tem 502 KiB de JSON. A timeline só desenha os clipes
 visíveis (busca binária por trilha) e as formas de onda viram uma malha por
 clipe, por isso o custo independe do tamanho total do projeto.
 
+### Fases 3–8 — efeitos, cor, áudio, motion, OFX, proxies
+
+Mesmo ambiente (4 vCPUs, sem GPU), `kompo-bench --quick` após a Fase 8:
+
+| Cenário | Resultado | Meta | Status |
+|---|---|---|---|
+| decode_4k_h264 | 46,5 fps (software) | ≥ 30 fps | ok |
+| decode_4k_hevc | 32,6 fps (software) | ≥ 30 fps | ok |
+| playback_4k_h264_3layers_2fx | 0 fps no tempo (p95 composição+render 1 783 ms) | 30 fps, ≥ 99% | **não atingida** (hardware) |
+| playback_4k_hevc_3layers_2fx | 0 fps no tempo (p95 2 001 ms) | 30 fps, ≥ 99% | **não atingida** (hardware) |
+| scrub_4k_h264 | 5,8 ms de custo máximo na UI; quadro exato p50 353 ms / p95 722 ms | < 16,7 ms | ok |
+| project_open_500 | 355 ms | < 2 000 ms | ok |
+| memory_soak (20 s) | +0,40% RSS | < 5% | ok |
+
+**Gargalo de M1 com efeitos (o cenário agora tem blur gaussiano + correção de cor LUT 3D por camada).** Além dos dois
+fatores da Fase 0 (rasterização em software e decodificação em software), o blur 4K e a LUT 3D de 65³ pontos custam
+centenas de ms no llvmpipe. Os efeitos nativos (`kompo.blur`, grade por LUT) rodam na GPU; os efeitos da biblioteca
+(300+) e os plug-ins OpenFX rodam na CPU e exigem leitura/escrita da GPU — por isso **não** são o caminho de tempo
+real em 4K: use proxies (abaixo) ou reduza a resolução de reprodução.
+
+**Proxies (Fase 8).** `Media › Create Proxies` gera H.264 all-intra a ¼ da resolução (4K → 960×540) em segundo plano,
+preservando as tags de cor da fonte; com `Media › Use Proxies` o player decodifica o proxy (16× menos pixels, GOP de 1
+quadro → acesso aleatório sem decodificar o grupo anterior). A exportação sempre usa o original. Validado em
+`kompo-engine/tests/proxy.rs`: dimensões, mesma contagem de quadros e quadro exato por número codificado na imagem.
+Miniaturas de timeline e formas de onda são geradas em threads de fundo e cacheadas em disco (`Media › Clear Cache`
+mostra e libera o espaço). Não há um cenário de benchmark dedicado a proxies; a medição de M1 em hardware real com e
+sem proxy fica para o procedimento "Como medir em hardware real".
+
 ### Como medir em hardware real
 
 ```sh

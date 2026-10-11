@@ -32,6 +32,12 @@ Variáveis úteis: `KOMPO_CPU_RENDER=1` (força o backend de render em CPU),
 `KOMPO_NO_HWDEC=1` (desliga decodificação por hardware), `KOMPO_NULL_AUDIO=1`
 (sem dispositivo de áudio, relógio silencioso), `WGPU_BACKEND=vulkan|metal|dx12|gl`.
 
+## Páginas
+
+**Cut** (edição, multicam, exportação) · **Color** (nós, LUTs, OCIO, scopes) · **Audio** (mixer, DSP, loudness R128) ·
+**Effects** (306 efeitos, transições, keyframes Bézier, OpenFX) · **Motion** (camadas, formas, texto, expressões).
+Proxies e cache em **Media**. Pacotes: `packaging/` (AppImage, .dmg, .msi). Código de terceiros: `THIRD_PARTY_NOTICES.md`.
+
 ## Estrutura
 
 ```
@@ -41,7 +47,8 @@ crates/
   kompo-gpu      grafo de render: wgpu/WGSL + backend CPU
   kompo-audio    conform, mixer, DSP, medidores, saída cpal
   kompo-color    ciência de cor, LUTs, OCIO
-  kompo-motion   composição em camadas
+  kompo-motion   composição em camadas, formas, texto, expressões
+  kompo-fx       efeitos, transições, grade de cor, OFX no grafo
   kompo-ofx      host OpenFX
   kompo-engine   reprodução, render de timeline, exportação (headless)
   kompo-app      interface (egui)

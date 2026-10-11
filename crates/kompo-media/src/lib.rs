@@ -11,6 +11,7 @@ pub mod encode;
 pub mod frame;
 pub mod image_io;
 pub mod probe;
+pub mod proxy;
 pub mod source;
 pub mod testmedia;
 pub mod video;

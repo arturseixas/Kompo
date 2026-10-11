@@ -47,6 +47,8 @@ pub struct Frames<'a> {
     playing: bool,
     opts: &'a DecoderOptions,
     blocking: Option<Duration>,
+    /// Read the small proxy files of media that have one.
+    proxy: bool,
     pub late: u32,
     pub missing: u32,
 }
@@ -59,7 +61,7 @@ impl<'a> Frames<'a> {
         opts: &'a DecoderOptions,
         blocking: Option<Duration>,
     ) -> Self {
-        Self { servers, stills, playing: true, opts, blocking, late: 0, missing: 0 }
+        Self { servers, stills, playing: true, opts, blocking, proxy: false, late: 0, missing: 0 }
     }
 }
 
@@ -73,8 +75,10 @@ impl FrameProvider for Frames<'_> {
             self.stills.insert(media.id, f.clone());
             return Some(f);
         }
-        let path = media.proxy.as_ref().filter(|_| false).map(|p| p.path.clone()).unwrap_or_else(|| media.path.clone());
-        let seq = media.sequence.clone();
+        let proxy = media.proxy.as_ref().filter(|p| self.proxy && p.path.is_file());
+        let path = proxy.map(|p| p.path.clone()).unwrap_or_else(|| media.path.clone());
+        // proxies are plain video files: image sequences never use them
+        let seq = if proxy.is_some() { None } else { media.sequence.clone() };
         let opts = self.opts.clone();
         let server =
             self.servers.entry(clip.id).or_insert_with(|| FrameServer::spawn_source(&path, seq.clone(), opts.clone(), DECODE_AHEAD));
@@ -115,6 +119,8 @@ pub struct Player {
     loop_range: Option<TimeRange>,
     pub decoder_options: DecoderOptions,
     pub stats: PlayerStats,
+    /// Play proxies instead of originals where they exist.
+    pub use_proxies: bool,
 }
 
 impl Player {
@@ -140,6 +146,7 @@ impl Player {
             loop_range: None,
             decoder_options: DecoderOptions::default(),
             stats: PlayerStats::default(),
+            use_proxies: false,
         }
     }
 
@@ -340,6 +347,7 @@ impl Player {
                 playing: true,
                 opts: &self.decoder_options,
                 blocking: None,
+                proxy: self.use_proxies,
                 late: 0,
                 missing: 0,
             };
@@ -358,6 +366,7 @@ impl Player {
             playing: self.playing,
             opts: &self.decoder_options,
             blocking: None,
+            proxy: self.use_proxies,
             late: 0,
             missing: 0,
         };
@@ -382,6 +391,7 @@ impl Player {
             playing: self.playing,
             opts: &self.decoder_options,
             blocking: None,
+            proxy: self.use_proxies,
             late: 0,
             missing: 0,
         };
@@ -413,6 +423,7 @@ impl Player {
             playing: self.playing,
             opts: &self.decoder_options,
             blocking: None,
+            proxy: self.use_proxies,
             late: 0,
             missing: 0,
         };
@@ -432,6 +443,7 @@ impl Player {
             playing: true,
             opts: &self.decoder_options,
             blocking: Some(timeout),
+            proxy: false,
             late: 0,
             missing: 0,
         };
@@ -473,6 +485,7 @@ impl Player {
                 playing: self.playing,
                 opts: &self.decoder_options,
                 blocking: None,
+                proxy: self.use_proxies,
                 late: 0,
                 missing: 0,
             };

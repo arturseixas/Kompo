@@ -25,6 +25,9 @@ pub enum PoolAction {
     Multicam(Vec<MediaId>, kompo_engine::project_io::MulticamAlign),
     Relink(MediaId),
     Remove(Vec<MediaId>),
+    /// Create proxies at 1/divisor.
+    CreateProxy(Vec<MediaId>, u32),
+    RemoveProxy(Vec<MediaId>),
 }
 
 fn fmt_dur(t: Time) -> String {
@@ -51,7 +54,14 @@ fn detail(m: &MediaAsset) -> String {
     }
 }
 
-pub fn show(ui: &mut Ui, state: &mut PoolState, project: &Project, offline: &HashSet<MediaId>, audio: &AudioCache) -> Option<PoolAction> {
+pub fn show(
+    ui: &mut Ui,
+    state: &mut PoolState,
+    project: &Project,
+    offline: &HashSet<MediaId>,
+    audio: &AudioCache,
+    proxy_progress: &dyn Fn(MediaId) -> Option<f32>,
+) -> Option<PoolAction> {
     let mut action = None;
     ui.add_space(theme::SPACE_3);
     ui.label(RichText::new("Media").font(theme::strong()).color(theme::TEXT_2));
@@ -71,7 +81,7 @@ pub fn show(ui: &mut Ui, state: &mut PoolState, project: &Project, offline: &Has
         let resp = ui
             .dnd_drag_source(id, payload, |ui| {
                 let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-                draw_item(ui, rect, m, selected, resp.hovered(), offline.contains(&m.id), audio);
+                draw_item(ui, rect, m, selected, resp.hovered(), offline.contains(&m.id), audio, proxy_progress(m.id));
                 resp
             })
             .inner;
@@ -122,6 +132,18 @@ pub fn show(ui: &mut Ui, state: &mut PoolState, project: &Project, offline: &Has
                 }
             }
             ui.separator();
+            ui.menu_button("Proxy", |ui| {
+                for (label, d) in [("Create at half resolution", 2), ("Create at quarter resolution", 4)] {
+                    if ui.button(label).clicked() {
+                        action = Some(PoolAction::CreateProxy(sel.clone(), d));
+                        ui.close();
+                    }
+                }
+                if ui.button("Remove proxy").clicked() {
+                    action = Some(PoolAction::RemoveProxy(sel.clone()));
+                    ui.close();
+                }
+            });
             if offline.contains(&m.id) && ui.button("Relink…").clicked() {
                 action = Some(PoolAction::Relink(m.id));
                 ui.close();
@@ -147,7 +169,8 @@ pub fn show(ui: &mut Ui, state: &mut PoolState, project: &Project, offline: &Has
     action
 }
 
-fn draw_item(ui: &Ui, rect: Rect, m: &MediaAsset, selected: bool, hovered: bool, offline: bool, audio: &AudioCache) {
+#[allow(clippy::too_many_arguments)]
+fn draw_item(ui: &Ui, rect: Rect, m: &MediaAsset, selected: bool, hovered: bool, offline: bool, audio: &AudioCache, proxy: Option<f32>) {
     if selected {
         ui.painter().rect_filled(rect, theme::RADIUS_SM, theme::ACCENT_DIM);
     } else if hovered {
@@ -160,6 +183,11 @@ fn draw_item(ui: &Ui, rect: Rect, m: &MediaAsset, selected: bool, hovered: bool,
         d = "offline — right-click to relink".into();
     } else if let Some(ConformState::Pending { .. }) = audio.state(m.id, 0) {
         d.push_str(" · analyzing audio");
+    }
+    if let Some(p) = proxy {
+        d.push_str(&format!(" · proxy {:.0}%", p * 100.0));
+    } else if m.proxy.is_some() && !offline {
+        d.push_str(" · proxy");
     }
     widgets::label_at(ui, rect.left_center() + Vec2::new(theme::SPACE_2, 8.0), &d, theme::caption(), theme::TEXT_3);
 }

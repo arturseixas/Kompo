@@ -8,12 +8,15 @@
 
 pub mod audio;
 pub mod bench;
+pub mod cache;
 pub mod compose;
 pub mod export;
 pub mod frames;
 pub mod import;
 pub mod player;
 pub mod project_io;
+pub mod proxy;
+pub mod thumbs;
 pub mod tracking;
 
 pub use player::{Player, PlayerStats};

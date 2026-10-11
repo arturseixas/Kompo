@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Kompo
+GenericName=Video Editor
+Comment=Professional non-linear video editor
+Exec=kompo %F
+Icon=kompo
+Terminal=false
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=application/x-kompo-project;video/mp4;video/quicktime;video/x-matroska;
+StartupWMClass=kompo

@@ -95,6 +95,8 @@ pub struct KompoApp {
     pub color: crate::color_ui::ColorState,
     pub audio: crate::audio_ui::AudioState,
     pub motion: crate::motion_ui::MotionState,
+    pub proxies: kompo_engine::proxy::ProxyQueue,
+    pub thumbs: kompo_engine::thumbs::ThumbService,
 }
 
 impl KompoApp {
@@ -142,6 +144,8 @@ impl KompoApp {
             color: Default::default(),
             audio: Default::default(),
             motion: Default::default(),
+            proxies: Default::default(),
+            thumbs: Default::default(),
             launch: launch.clone(),
         };
         if launch.multicam && launch.files.len() >= 2 {
@@ -703,6 +707,17 @@ impl KompoApp {
                     }
                 }
             }
+            PoolAction::CreateProxy(ids, d) => self.create_proxies(&ids, d),
+            PoolAction::RemoveProxy(ids) => {
+                self.history.view_change(|p| {
+                    for id in &ids {
+                        if let Some(m) = p.media.get_mut(id) {
+                            m.proxy = None;
+                        }
+                    }
+                });
+                self.sync_player();
+            }
             PoolAction::Remove(ids) => {
                 self.history.edit("Remove Media", |p| {
                     for id in &ids {
@@ -710,6 +725,28 @@ impl KompoApp {
                     }
                 });
                 self.pool.selection.clear();
+            }
+        }
+    }
+
+    fn create_proxies(&mut self, ids: &[MediaId], divisor: u32) {
+        let n = ids.iter().filter_map(|id| self.history.project().media(*id)).filter(|a| self.proxies.submit(a, divisor)).count();
+        self.notify(if n == 0 { "No video media to proxy".to_string() } else { format!("Creating {n} proxy file(s) in the background") });
+    }
+
+    fn poll_proxies(&mut self) {
+        for done in self.proxies.poll() {
+            match done.result {
+                Ok(info) => {
+                    self.history.view_change(|p| {
+                        if let Some(m) = p.media.get_mut(&done.media) {
+                            m.proxy = Some(info);
+                        }
+                    });
+                    self.sync_player();
+                    self.notify("Proxy ready");
+                }
+                Err(e) => self.notify(format!("Proxy failed: {e}")),
             }
         }
     }
@@ -1038,6 +1075,36 @@ impl KompoApp {
                     ui.close();
                 }
             });
+            ui.menu_button(RichText::new("Media").color(theme::TEXT_2), |ui| {
+                let mut on = self.player.use_proxies;
+                if ui.checkbox(&mut on, "Use Proxies").changed() {
+                    self.player.use_proxies = on;
+                    self.sync_player();
+                    self.notify(if on { "Playing proxies" } else { "Playing originals" });
+                }
+                if item(ui, "Create Proxies for All Video (1/4)", "") {
+                    let ids: Vec<MediaId> = self.history.project().media.keys().copied().collect();
+                    self.create_proxies(&ids, 4);
+                    ui.close();
+                }
+                ui.separator();
+                let u = kompo_engine::cache::usage();
+                if item(ui, &format!("Clear Cache ({})", kompo_engine::cache::human(u.total())), "") {
+                    let freed = kompo_engine::cache::clear(true, true);
+                    self.history.view_change(|p| {
+                        let ids: Vec<MediaId> = p.media.keys().copied().collect();
+                        for id in ids {
+                            if let Some(m) = p.media.get_mut(&id) {
+                                m.proxy = None;
+                            }
+                        }
+                    });
+                    self.thumbs.clear();
+                    self.sync_player();
+                    self.notify(format!("Freed {}", kompo_engine::cache::human(freed)));
+                    ui.close();
+                }
+            });
             ui.menu_button(RichText::new("Mark").color(theme::TEXT_2), |ui| {
                 if item(ui, "Mark In", "I") {
                     self.mark_in();
@@ -1190,7 +1257,9 @@ impl KompoApp {
             let action = egui::ScrollArea::vertical()
                 .id_salt("pool")
                 .show(&mut child, |ui| {
-                    media_pool::show(ui, &mut self.pool, self.history.project(), &self.offline, &self.player.audio_cache)
+                    media_pool::show(ui, &mut self.pool, self.history.project(), &self.offline, &self.player.audio_cache, &|id| {
+                        self.proxies.progress(id)
+                    })
                 })
                 .inner;
             if let Some(a) = action {
@@ -1278,6 +1347,9 @@ impl KompoApp {
         let resp = {
             let cache = &self.player.audio_cache;
             let waveforms = |m: MediaId, s: usize| cache.get(m, s);
+            let svc = &self.thumbs;
+            let proj = self.history.project().clone();
+            let thumbs = |m: MediaId| proj.media(m).and_then(|a| svc.get(a));
             let mut tl_ui = ui.new_child(egui::UiBuilder::new().max_rect(timeline_rect));
             self.timeline.show(
                 &mut tl_ui,
@@ -1287,6 +1359,7 @@ impl KompoApp {
                     playhead: self.player.playhead(),
                     playing: self.player.is_playing(),
                     waveforms: &waveforms,
+                    thumbs: &thumbs,
                     offline: &self.offline,
                 },
             )
@@ -1417,6 +1490,10 @@ impl eframe::App for KompoApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let title = format!("Kompo — {}{}", self.history.project().name, if self.history.is_dirty() { " •" } else { "" });
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(title));
+        self.poll_proxies();
+        if self.proxies.is_busy() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
         self.frame(ui);
         self.screenshot(ui);
     }

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Kompo" Manufacturer="Kompo" Version="$(var.Version)" UpgradeCode="6f1d3c52-8b0e-4c8e-9a53-3a1f6a4b7d10" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Kompo is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Kompo" />
+    </StandardDirectory>
+    <Feature Id="Main" Title="Kompo" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="Shortcut" />
+    </Feature>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="Shortcut" Guid="0b9a2a1c-5e6d-4b0e-8c27-91d2f7c4a3e8">
+        <Shortcut Id="StartMenu" Name="Kompo" Target="[INSTALLFOLDER]kompo.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\Kompo" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+  </Package>
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <!-- target\dist\*.exe and *.dll are harvested by build-msi.ps1 -->
+    </ComponentGroup>
+  </Fragment>
+</Wix>
